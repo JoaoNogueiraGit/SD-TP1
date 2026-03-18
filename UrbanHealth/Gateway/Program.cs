@@ -13,7 +13,7 @@ class Gateway {
 
     static async Task Main(string[] args) {
 
-        await ConnectToServer();
+        await ConnectToServerAsync();
 
         _listener = new TcpListener(IPAddress.Any, Port);
         _listener.Start();
@@ -30,13 +30,17 @@ class Gateway {
         }
     }
 
-    private static async Task ConnectToServer()
+    // Establish TCP connection between the gateway and the server
+    private static async Task ConnectToServerAsync()
     {
         try
         {
             _client = new TcpClient();
             await _client.ConnectAsync(ServerIP, ServerPort);
             Console.WriteLine("[GATEWAY] Connected to the server.");
+
+            // Task to Listen to the Server (SERVER ---MSG---> GATEWAY)
+            _ = Task.Run(() => ListenToServerAsync(_client));
 
             var sts = new Message
             {
@@ -53,7 +57,18 @@ class Gateway {
 
     }
 
+    
+    private static async Task ListenToServerAsync(TcpClient server)
+    {
+        while (true)
+        {
+            var msg = await Message.ReceiveMessageAsync(server);
+            if (msg == null) break;
 
+            Console.WriteLine($"[SERVER -> GATEWAY]: Command received: {msg.CMD}");
+            await ProcessMessage(server, msg);
+        }
+    }
 
     private static async Task HandleSensorAsync(TcpClient client) {
         
