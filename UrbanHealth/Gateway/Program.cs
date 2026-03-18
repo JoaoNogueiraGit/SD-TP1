@@ -1,13 +1,19 @@
 ﻿using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using Shared;
 
 class Gateway {
 
     private static TcpListener _listener;
+    private static TcpClient _client;
     private const int Port = 5000;
+    private const string ServerIP = "127.0.0.1";
+    private const int ServerPort = 5001;
 
     static async Task Main(string[] args) {
+
+        await ConnectToServer();
 
         _listener = new TcpListener(IPAddress.Any, Port);
         _listener.Start();
@@ -23,6 +29,31 @@ class Gateway {
             _ = Task.Run(() => HandleSensorAsync(client));
         }
     }
+
+    private static async Task ConnectToServer()
+    {
+        try
+        {
+            _client = new TcpClient();
+            await _client.ConnectAsync(ServerIP, ServerPort);
+            Console.WriteLine("[GATEWAY] Connected to the server.");
+
+            var sts = new Message
+            {
+                CMD = "STS",
+                GID = "G101",
+            };
+            sts.Data["STATUS"] = "ONLINE";
+            await Message.SendMessageAsync(_client, sts);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[GATEWAY] Could not estabilish connection with server: {ex.Message}");
+        }
+
+    }
+
+
 
     private static async Task HandleSensorAsync(TcpClient client) {
         
