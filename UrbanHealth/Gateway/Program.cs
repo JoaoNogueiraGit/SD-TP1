@@ -23,6 +23,8 @@ class Program {
 
         _config.LoadConfig();
 
+        await ConnectToServerAsync();
+
         // Starts cleaning routine of inactive sensors
         _ = Task.Run(async () => {
 
