@@ -97,8 +97,9 @@ class Program {
                 Console.WriteLine($"[SERVER -> GATEWAY] Command received: {msg.CMD}; Type: {msg.Data["TYPE"]};");
                 // Here you can process ACKs from the server in the future
             }
-        } catch { }
-        Console.WriteLine("[GATEWAY] Connection to Server lost!");
+        } catch {
+            Console.WriteLine("[GATEWAY] Connection to Server lost!");
+        }
     }
 
 
