@@ -1,10 +1,14 @@
 ﻿using System;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using Server;
 using Shared; // Your common library
 
 class Program {
+    private static StorageManager _storage = new StorageManager();
+
     static async Task Main(string[] args) {
         int port = 5001;
         var listener = new TcpListener(IPAddress.Any, port);
@@ -43,6 +47,8 @@ class Program {
                         Console.WriteLine($"   -> Forwarded Data from Sensor: {msg.SID}");
                         Console.WriteLine($"   -> Injected Zone: {msg.Data["ZONE"]}");
                         Console.WriteLine($"   -> Reading: {msg.Data["TYPE"]} = {msg.Data["VALUE"]}");
+
+                        await _storage.Savemessage(msg);
                     }
                 }
             } catch (Exception ex) {

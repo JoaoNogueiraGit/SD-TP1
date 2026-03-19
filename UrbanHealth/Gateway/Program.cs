@@ -94,7 +94,7 @@ class Program {
                 var msg = await Message.ReceiveMessageAsync(server);
                 if (msg == null) break; // Server closed the connection
 
-                Console.WriteLine($"[SERVER -> GATEWAY] Command received: {msg.CMD}");
+                Console.WriteLine($"[SERVER -> GATEWAY] Command received: {msg.CMD}; Type: {msg.Data["TYPE"]};");
                 // Here you can process ACKs from the server in the future
             }
         } catch { }
@@ -150,6 +150,7 @@ class Program {
                     Console.WriteLine($"[HB] {msg.SID} is alive.");
                 }
                 break;
+
         }
     }
 
