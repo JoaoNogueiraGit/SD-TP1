@@ -7,8 +7,8 @@ using Server;
 using Shared; // Your common library
 
 class Program {
-    private static StorageManager _storage = new StorageManager();
-
+    //private static StorageManager _storage = new StorageManager();
+    private static DataBaseManager _dbManager = new DataBaseManager();
     static async Task Main(string[] args) {
         int port = 5001;
         var listener = new TcpListener(IPAddress.Any, port);
@@ -48,7 +48,8 @@ class Program {
                         Console.WriteLine($"   -> Injected Zone: {msg.Data["ZONE"]}");
                         Console.WriteLine($"   -> Reading: {msg.Data["TYPE"]} = {msg.Data["VALUE"]}");
 
-                        await _storage.Savemessage(msg);
+                        //await _storage.Savemessage(msg);
+                        await _dbManager.SaveReadingsAsync(msg);
                     }
                 }
             } catch (Exception ex) {
