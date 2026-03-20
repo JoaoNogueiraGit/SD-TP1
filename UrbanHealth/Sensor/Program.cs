@@ -1,8 +1,9 @@
 ﻿using System;
+using System.IO;
 using System.Net.Sockets;
 using System.Security.Principal;
 using System.Threading.Tasks;
-using Shared; 
+using Shared;
 
 class Program {
 
@@ -14,6 +15,10 @@ class Program {
     // State management
     private static bool _isAuthenticated = false;
     private static string _zone = "Unknown";
+
+    private static bool _isStreaming = false;
+    private static string _requestedStreamAction = ""; // stores last (START or STOP)
+
     static async Task Main(string[] args) {
 
         // Read console args
@@ -30,6 +35,8 @@ class Program {
         Console.WriteLine("==================================================");
         Console.WriteLine(" Interactive Menu. Available commands:");
         Console.WriteLine(" -> DATA <TYPE> <VALUE> (e.g., DATA HUM 65.2)");
+        Console.WriteLine(" -> STRM START (to request video transmission)");
+        Console.WriteLine(" -> STRM STOP (to end video transmission)");
         Console.WriteLine(" -> DISCONN (to gracefully shutdown)");
         Console.WriteLine("==================================================\n");
 
@@ -37,6 +44,8 @@ class Program {
         _ = Task.Run(HeartbeatRoutineAsync);
         // _ = Task.Run(DataGenerationRoutineAsync);
         _ = Task.Run(ConnectToGatewayLoopAsync);
+        _ = Task.Run(VideoStreamRoutineAsync);
+
 
 
         while (true) {
@@ -57,6 +66,31 @@ class Program {
                     Console.WriteLine("[SENSOR] Shutting down (was not connected).");
                 }
                 break; // Exits the while loop and closes the app
+            }
+            else if (command == "STRM") {
+                if (!_isAuthenticated || _gatewayClient == null || !_gatewayClient.Connected) {
+                    Console.WriteLine("[WARNING] Cannot send stream request: Sensor is not authenticated.");
+                    continue;
+                }
+
+                if (parts.Length >= 2) {
+                    string action = parts[1].ToUpper();
+                    if (action == "START" || action == "STOP") {
+                        _requestedStreamAction = action; // Store to know what ACK means
+
+                        var strmMsg = new Message { CMD = "STRM", SID = SID };
+                        strmMsg.Data["ACTION"] = action;
+
+                        await Message.SendMessageAsync(_gatewayClient, strmMsg);
+                        Console.WriteLine($"[SENSOR] Sent STRM {action}, waiting for authorization...");
+                    }
+                    else {
+                        Console.WriteLine("[ERROR] Invalid action. Use: STRM START or STRM STOP");
+                    }
+                }
+                else {
+                    Console.WriteLine("[ERROR] Invalid format. Use: STRM START or STRM STOP");
+                }
             }
             else if (command == "DATA") {
                 if (!_isAuthenticated || _gatewayClient == null || !_gatewayClient.Connected) {
@@ -86,7 +120,7 @@ class Program {
                 }
             }
             else {
-                Console.WriteLine("[ERROR] Unknown command. Use DATA or DISCONN.");
+                Console.WriteLine("[ERROR] Unknown command. Use DATA, STRM or DISCONN.");
             }
         }
 
@@ -96,7 +130,7 @@ class Program {
     private static async Task ConnectToGatewayLoopAsync() {
 
         while (true) {
-            
+
             try {
 
                 _gatewayClient = new TcpClient();
@@ -117,37 +151,58 @@ class Program {
 
             // if we reach here, the connection dropped
             _isAuthenticated = false;
+            _isStreaming = false;
             await Task.Delay(5000);
         }
     }
 
     private static async Task ListenToGatewayAsync(TcpClient gateway) {
 
-        try { 
+        try {
             while (true) {
 
                 var msg = await Message.ReceiveMessageAsync(gateway);
                 if (msg == null) break; // Gateway closed the connection
 
                 string msgType = msg.Data.ContainsKey("TYPE") ? msg.Data["TYPE"] : "N/A";
-                Console.WriteLine($"[GATEWAY -> SENSOR] Command received: {msg.CMD}; Type: {msgType}");
+
+                // Avoid logging ACKs unless necessary
+                if (msgType != "ACK") {
+                    Console.WriteLine($"[GATEWAY -> SENSOR] Command received: {msg.CMD}; Type: {msgType}");
+                }
 
                 if (msg.CMD == "MSG" && msg.Data.ContainsKey("TYPE")) {
-                    
-                    if (msg.Data["TYPE"] == "ACK" && msg.Data["REF_CMD"] == "CONN") {
-                        _isAuthenticated = true;
 
-                        if (msg.Data.ContainsKey("ZONE")) _zone = msg.Data["ZONE"];
-                        Console.WriteLine($"[AUTH] Success! Operating in zone: {_zone}");
-                    } else if (msg.Data["TYPE"] == "ERR") {
-                        Console.WriteLine("[AUTH] Sensor got rejected by gateway.");
-                        break;
+                    if (msg.Data["TYPE"] == "ACK") {
+                        if (msg.Data["REF_CMD"] == "CONN") {
+                            _isAuthenticated = true;
+
+                            if (msg.Data.ContainsKey("ZONE")) _zone = msg.Data["ZONE"];
+                            Console.WriteLine($"[AUTH] Success! Operating in zone: {_zone}");
+                        }
+                        else if (msg.Data["REF_CMD"] == "STRM") {
+                            if (_requestedStreamAction == "START") {
+                                _isStreaming = true;
+                                Console.WriteLine("[STREAM] Gateway authorized START. Sending bytes...");
+                            }
+                            else if (_requestedStreamAction == "STOP") {
+                                _isStreaming = false;
+                                Console.WriteLine("[STREAM] Gateway authorized STOP. Video paused.");
+                            }
+                        }
+                    }
+                    else if (msg.Data["TYPE"] == "ERR") {
+                        if (msg.Data["REF_CMD"] == "CONN") {
+                            Console.WriteLine("[AUTH] Sensor got rejected by gateway.");
+                            break;
+                        }
                     }
                 }
             }
         } catch { }
         Console.WriteLine("[SENSOR] Connection to Gateway lost!");
         _isAuthenticated = false;
+        _isStreaming = false;
     }
 
     private static async Task HeartbeatRoutineAsync() {
@@ -162,6 +217,7 @@ class Program {
                     // Console.WriteLine("[SENSOR] Sent HB"); // Uncomment to see in action
                 } catch {
                     _isAuthenticated = false;
+                    _isStreaming = false;
                 }
             }
         }
@@ -186,6 +242,71 @@ class Program {
                     Console.WriteLine($"[DATA] Sent TEMP: {dataMsg.Data["VALUE"]}°C");
                 } catch {
                     _isAuthenticated = false;
+                    _isStreaming = false;
+                }
+            }
+        }
+    }
+
+    private static async Task VideoStreamRoutineAsync() {
+        using var udpClient = new UdpClient();
+        const int chunkSize = 1400; 
+
+        // Pasta onde vais colocar a tua "sequência de vídeo"
+        string framesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Frames");
+
+        // Cria a pasta automaticamente se ela não existir
+        if (!Directory.Exists(framesFolder)) {
+            Directory.CreateDirectory(framesFolder);
+            // Console.WriteLine($"[AVISO DE VÍDEO] Criei a pasta: {framesFolder}");
+            // Console.WriteLine("[AVISO DE VÍDEO] Coloca lá algumas imagens .jpg (ex: 1.jpg, 2.jpg) para simular o vídeo.");
+        }
+
+        while (true) {
+            // Only stream if authenticated AND user requested START
+            if (!_isAuthenticated || !_isStreaming) {
+                await Task.Delay(1000);
+                continue;
+            }
+
+            // Get every image in directory
+            string[] frames = Directory.Exists(framesFolder)
+                ? Directory.GetFiles(framesFolder, "*.jpg")
+                : Array.Empty<string>();
+
+            if (frames.Length == 0) {
+                await Task.Delay(2000); // Wait if there is no images
+                continue;
+            }
+
+            // Percorre cada imagem (Frame) para criar a ilusão de movimento
+            foreach (var framePath in frames) {
+                // Double check status inside frame loop to stop instantly
+                if (!_isStreaming || !_isAuthenticated) break;
+
+                await Task.Delay(200); // ~5 FPS (Change to 100 to get 10 fps) 
+
+                try {
+                    byte[] imageBytes = await File.ReadAllBytesAsync(framePath);
+                    int totalParts = (int)Math.Ceiling((double)imageBytes.Length / chunkSize);
+
+                    for (int i = 0; i < totalParts; i++) {
+                        int currentOffset = i * chunkSize;
+                        int size = Math.Min(chunkSize, imageBytes.Length - currentOffset);
+                        byte[] buffer = new byte[size];
+                        Buffer.BlockCopy(imageBytes, currentOffset, buffer, 0, size);
+
+                        var videoMsg = new Message { CMD = "STRM", SID = SID, GID = "G101" };
+                        videoMsg.Data["TYPE"] = "DATA";
+                        videoMsg.Data["PART"] = (i + 1).ToString();
+                        videoMsg.Data["TOTAL"] = totalParts.ToString();
+                        videoMsg.BinaryData = buffer;
+
+                        byte[] packet = videoMsg.ToUdpBytes();
+                        await udpClient.SendAsync(packet, packet.Length, GatewayIP, 5002);
+                    }
+                } catch {
+                    // Ignore in silence
                 }
             }
         }

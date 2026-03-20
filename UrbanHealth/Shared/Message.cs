@@ -35,7 +35,7 @@ namespace Shared {
                 sb.AppendLine($"{entry.Key}:{entry.Value}");
             }
 
-            sb.AppendLine("<EOF>"); // terminator of header
+            sb.Append("<EOF>"); // terminator of header
             return sb.ToString();
         }
 
@@ -103,6 +103,39 @@ namespace Shared {
                 Console.WriteLine($"Error receiveing message: {ex.Message}");
                 return null;
             }
+        }
+
+        // Pack the message for UDP (Text Header + Binary Payload)
+        public byte[] ToUdpBytes() {
+            string header = this.ToString(); // Already includes <EOF>
+            byte[] headerBytes = Encoding.UTF8.GetBytes(header);
+
+            if (BinaryData == null) return headerBytes;
+
+            byte[] fullPacket = new byte[headerBytes.Length + BinaryData.Length];
+            Buffer.BlockCopy(headerBytes, 0, fullPacket, 0, headerBytes.Length);
+            Buffer.BlockCopy(BinaryData, 0, fullPacket, headerBytes.Length, BinaryData.Length);
+            return fullPacket;
+        }
+
+        // Unpack UDP bytes back into a Message object
+        public static Message FromUdpBytes(byte[] packet) {
+            string fullData = Encoding.UTF8.GetString(packet);
+            int eofIndex = fullData.IndexOf("<EOF>");
+
+            if (eofIndex == -1) return null;
+
+            // Extract header
+            string headerText = fullData.Substring(0, eofIndex + 5);
+            Message msg = Message.Parse(headerText);
+
+            // Extract binary data if there's anything after <EOF>
+            int headerSize = Encoding.UTF8.GetByteCount(headerText);
+            if (packet.Length > headerSize) {
+                msg.BinaryData = new byte[packet.Length - headerSize];
+                Buffer.BlockCopy(packet, headerSize, msg.BinaryData, 0, msg.BinaryData.Length);
+            }
+            return msg;
         }
     }
 }

@@ -8,22 +8,31 @@ class Program {
     private static TcpListener _listener;
     private static TcpClient _serverClient; // Added to maintain the connection to the Central Server
 
+    private static UdpClient _udpListener;
+    private const int UdpPort = 5002;
+
     private const int Port = 5000;
     private const string ServerIP = "127.0.0.1"; // Central Server IP
     private const int ServerPort = 5001;         // Central Server Port
     private const string GID = "G101";
 
+    // Store for incomplete frames: Dictionary<SensorID, List<PartBytes>>
+    private static ConcurrentDictionary<string, byte[][]> _videoBuffer = new();
+
     private static ConfigManager _config = new ConfigManager();
     // Registry of who's online right now (SID -> Last Activity)
     private static ConcurrentDictionary<string, DateTime> _activeSensors = new();
 
+    // Registry of who's allowed to stream video right now
+    private static ConcurrentDictionary<string, bool> _activeStreams = new();
+
     static async Task Main(string[] args) {
         _config.LoadConfig();
 
-        // 1. Launch the Server connection task in the background (will try to connect infinitely)
+        // Launch the Server connection task in the background (will try to connect infinitely)
         _ = Task.Run(ConnectToServerLoopAsync);
 
-        // 2. Starts cleaning routine for inactive sensors
+        // Starts cleaning routine for inactive sensors
         _ = Task.Run(async () => {
             while (true) {
                 await Task.Delay(15000); // Checks every 15 seconds
@@ -46,10 +55,14 @@ class Program {
             }
         });
 
-        // 3. Start the Gateway to listen for Sensors
+        // Start the Gateway to listen for Sensors
         _listener = new TcpListener(IPAddress.Any, Port);
         _listener.Start();
         Console.WriteLine($"[GATEWAY] Active on port {Port}");
+
+        // inicia o listener de video udp
+        _udpListener = new UdpClient(UdpPort);
+        _ = Task.Run(ListenForVideoUdpAsync);
 
         while (true) {
             // Accept TCP connection async
@@ -57,6 +70,8 @@ class Program {
             Console.WriteLine($"[GATEWAY] New sensor detected. Initiating handler...");
             _ = Task.Run(() => HandleSensorAsync(client));
         }
+
+        
     }
 
     // =========================================================
@@ -159,6 +174,9 @@ class Program {
                 }
                 break;
 
+            case "STRM":
+                await HandleStreamControl(client, msg);
+                break;
         }
     }
 
@@ -268,6 +286,96 @@ class Program {
             else {
                 Console.WriteLine($"[WARNING] Data from {msg.SID} discarded: Server is not connected.");
             }
+        }
+    }
+
+    // LÓGICA DE VIDEO (UDP)
+
+    private static async Task HandleStreamControl(TcpClient client, Message msg) {
+
+        if (!_activeSensors.ContainsKey(msg.SID)) return; // only online sensors can ask permission to stream
+
+        string action = msg.Data.ContainsKey("ACTION") ? msg.Data["ACTION"].ToUpper() : "";
+
+        var response = new Message { CMD = "MSG", SID = msg.SID, GID = GID };
+        response.Data["REF_CMD"] = "STRM";
+
+        if (action == "START") {
+            _activeStreams.TryAdd(msg.SID, true);
+            response.Data["TYPE"] = "ACK";
+            Console.WriteLine($"[STREAM CONTROL] The sensor {msg.SID} started video streaming");
+        } else if (action == "STOP") {
+            _activeStreams.TryRemove(msg.SID, out _);
+
+            // clean any garbage that might have stayed in this sensor buffer
+            _videoBuffer.TryRemove(msg.SID, out _);
+
+            response.Data["TYPE"] = "ACK";
+            Console.WriteLine($"[STREAM CONTROL] The sensor {msg.SID} stopped video streaming");
+        } else {
+            response.Data["TYPE"] = "ERR";
+            response.Data["REASON"] = "INVALID_ACTION";
+        }
+
+        await Message.SendMessageAsync(client, response);
+    }
+
+    private static async Task ListenForVideoUdpAsync() {
+        try {
+            
+            Console.WriteLine("[GATEWAY-VIDEO] UDP Listener listening on port 5002...");
+
+            while (true) {
+                var result = await _udpListener.ReceiveAsync();
+                // Console.WriteLine($"\n[DEBUG UDP] -> Recebi pacote UDP de {result.Buffer.Length} bytes!");
+
+                var msg = Message.FromUdpBytes(result.Buffer);
+
+                if (msg == null) {
+                    // Console.WriteLine("[DEBUG UDP] -> ERRO: O pacote não é uma Message válida.");
+                    continue;
+                }
+
+                // Console.WriteLine($"[DEBUG UDP] -> Mensagem convertida: SID={msg.SID}, PARTE={msg.Data["PART"]}/{msg.Data["TOTAL"]}");
+
+                if (!_activeSensors.ContainsKey(msg.SID)) {
+                    Console.WriteLine($"[ERROR] The sensor {msg.SID} is not on the sensors list!");
+                    continue;
+                }
+
+                if (!_activeStreams.ContainsKey(msg.SID)) {
+                    Console.WriteLine($"[WARNING] Video package rejected. {msg.SID} didn's start STRM.");
+                    continue;
+                }
+
+                int part = int.Parse(msg.Data["PART"]);
+                int total = int.Parse(msg.Data["TOTAL"]);
+
+                // Se o sensor ainda não tem buffer, OU se a nova imagem tem um tamanho diferente da que estava encravada...
+                if (!_videoBuffer.TryGetValue(msg.SID, out var chunks) || chunks.Length != total) {
+                    chunks = new byte[total][]; // Cria um novo espaço em branco
+                    _videoBuffer[msg.SID] = chunks; // Substitui o frame estragado pelo novo
+                }
+                chunks[part - 1] = msg.BinaryData;
+
+                // Console.WriteLine($"[DEBUG UDP] -> Guardei a parte {part} no buffer.");
+
+                // Verify if not all parts of the array are null already
+                if (chunks.All(c => c != null)) {
+                    byte[] fullImage = chunks.SelectMany(c => c).ToArray();
+                   
+                    string exactPath = Path.GetFullPath($"last_frame_{msg.SID}.jpg");
+
+                    await File.WriteAllBytesAsync(exactPath, fullImage);
+
+                    _videoBuffer.TryRemove(msg.SID, out _); // Limpa para a próxima
+
+                    // Console.WriteLine($"\n[VIDEO] Frame montado com sucesso!");
+                    // Console.WriteLine($"[Caminho do Ficheiro] ---> {caminhoExato}\n");
+                }
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[ERROR] {ex.Message}");
         }
     }
 }
