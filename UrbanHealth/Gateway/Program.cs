@@ -64,7 +64,8 @@ class Program {
     // =========================================================
 
     private static async Task ConnectToServerLoopAsync() {
-        while (true) {
+        var count = 0;
+        while (count < 5) {
             try {
                 _serverClient = new TcpClient();
                 Console.WriteLine("[GATEWAY] Trying to connect to Central Server...");
@@ -81,6 +82,7 @@ class Program {
             } catch {
                 // Failed or connection dropped. Silence the error and try again.
                 Console.WriteLine("[GATEWAY] Server offline. Retrying in 5 seconds...");
+                count++;
             }
 
             // Wait before trying to reconnect
