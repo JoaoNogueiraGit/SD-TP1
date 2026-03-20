@@ -28,7 +28,7 @@ namespace Server
         public async Task Savemessage(Message msg)
         {
             string dataType = msg.Data.ContainsKey("TYPE") ? msg.Data["TYPE"] : "UNKNOWN";
-            string filename = Path.Combine(_baseDirectory, $"dados_{dataType.ToLower()}.csv");
+            string filename = Path.Combine(_baseDirectory, $"dados_{dataType.ToLower()}.csv");  
 
             var semaphore = _fileLocks.GetOrAdd(filename, _ => new SemaphoreSlim(1, 1));
 

@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.12.35521.163 d17.12
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11612.150 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Shared", "Shared\Shared.csproj", "{E12741F4-1840-488A-8D93-24E39F5A950A}"
 EndProject
@@ -10,6 +10,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gateway", "Gateway\Gateway.csproj", "{89886D2B-1F9D-4431-BD61-7E6A0E8AE11A}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Server", "Server\Server.csproj", "{5ED8799F-BF77-41F0-BD7A-48E9A6D084E8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StressTest", "StressTest\StressTest.csproj", "{D9772C04-D81D-4070-9D53-021856B1077D}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -33,8 +35,15 @@ Global
 		{5ED8799F-BF77-41F0-BD7A-48E9A6D084E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{5ED8799F-BF77-41F0-BD7A-48E9A6D084E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5ED8799F-BF77-41F0-BD7A-48E9A6D084E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D9772C04-D81D-4070-9D53-021856B1077D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D9772C04-D81D-4070-9D53-021856B1077D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D9772C04-D81D-4070-9D53-021856B1077D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D9772C04-D81D-4070-9D53-021856B1077D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {854E501D-7D5F-420B-8B10-804F031D60B5}
 	EndGlobalSection
 EndGlobal
