@@ -8,7 +8,7 @@ class StressTest
 {
     private const string GatewayIP = "127.0.0.1";
     private const int GatewayPort = 5000;
-    private const int NumberOfSensors = 10; // Quantos sensores queres simular ao mesmo tempo
+    private const int NumberOfSensors = 10; // Quantos sensores simular ao mesmo tempo
 
     static async Task Main(string[] args)
     {
@@ -34,14 +34,14 @@ class StressTest
             using var client = new TcpClient();
             await client.ConnectAsync(GatewayIP, GatewayPort);
 
-            // 1. Enviar CONN
+            // Enviar CONN
             var conn = new Message { CMD = "CONN", SID = sid };
             await Message.SendMessageAsync(client, conn);
             var res = await Message.ReceiveMessageAsync(client);
 
             if (res?.Data["TYPE"] == "ACK")
             {
-                // 2. Enviar 5 rajadas de dados rapidamente para forçar concorrência de escrita
+                // Enviar 5 rajadas de dados rapidamente para forçar concorrência de escrita
                 for (int j = 0; j < 5; j++)
                 {
                     var data = new Message { CMD = "DATA", SID = sid };
