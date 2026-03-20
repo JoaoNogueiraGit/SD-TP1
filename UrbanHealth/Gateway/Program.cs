@@ -94,7 +94,8 @@ class Program {
                 var msg = await Message.ReceiveMessageAsync(server);
                 if (msg == null) break; // Server closed the connection
 
-                Console.WriteLine($"[SERVER -> GATEWAY] Command received: {msg.CMD}; Type: {msg.Data["TYPE"]};");
+                string msgType = msg.Data.ContainsKey("TYPE") ? msg.Data["TYPE"] : "N/A";
+                Console.WriteLine($"[SERVER -> GATEWAY] Command received: {msg.CMD}; Type: {msgType}");
                 // Here you can process ACKs from the server in the future
             }
         } catch {
@@ -116,7 +117,7 @@ class Program {
 
                     if (msg == null) {
                         Console.WriteLine($"[DISCONNECT] Sensor {sensorId} closed the connection.");
-                        if (sensorId != "Unknown") {
+                        if (sensorId != "Unknown" && _activeSensors.ContainsKey(sensorId)) {
                             _activeSensors.TryRemove(sensorId, out _);
                             _config.UpdateSensorState(sensorId, "offline");
                             _config.SaveConfig();
@@ -138,6 +139,10 @@ class Program {
         switch (msg.CMD) {
             case "CONN":
                 await HandleConnection(client, msg);
+                break;
+
+            case "DISCONN":
+                await HandleDisconnection(client, msg);
                 break;
 
             case "DATA":
@@ -166,25 +171,57 @@ class Program {
         response.Data["REF_CMD"] = "CONN";
 
         if (exists) {
-            if (state == "offline" || state == "desativado") {
-                // Change state to online in memory
-                _config.UpdateSensorState(msg.SID, "online");
-                // Save to CSV instantly because it's an important event
-                _config.SaveConfig();
+
+            if (state.ToLower() == "maintenance") {
+                response.Data["TYPE"] = "ERR";
+                response.Data["REASON"] = "MAINTENANCE";
+                Console.WriteLine($"[AUTH] Sensor {msg.SID} rejected (Under Maintenance)");
+            } else {
+
+                if (state == "offline" || state == "desativado") {
+                    // Change state to online in memory
+                    _config.UpdateSensorState(msg.SID, "online");
+                    // Save to CSV instantly because it's an important event
+                    _config.SaveConfig();
+                }
+
+                response.Data["TYPE"] = "ACK";
+                response.Data["ZONE"] = zone; // Inject the zone so the sensor knows
+
+                _activeSensors[msg.SID] = DateTime.Now;
+                Console.WriteLine($"[AUTH] Sensor {msg.SID} authorized in {zone}");
             }
 
-            response.Data["TYPE"] = "ACK";
-            response.Data["ZONE"] = zone; // Inject the zone so the sensor knows
-
-            _activeSensors[msg.SID] = DateTime.Now;
-            Console.WriteLine($"[AUTH] Sensor {msg.SID} authorized in {zone}");
         }
         else {
             response.Data["TYPE"] = "ERR";
+            response.Data["REASON"] = "UNKNOWN_SENSOR";
             Console.WriteLine($"[AUTH] Sensor {msg.SID} rejected");
         }
 
         await Message.SendMessageAsync(client, response);
+    }
+
+    private static async Task HandleDisconnection(TcpClient client, Message msg) {
+        Console.WriteLine($"\n[DISCONNECT] Disconnection request from sensor {msg.SID}");
+                            
+        if (_activeSensors.ContainsKey(msg.SID)) {
+            // remove from active sensors in memory
+            _activeSensors.TryRemove(msg.SID, out _);
+
+            // update satte to offline in csv and saves on disc
+            _config.UpdateSensorState(msg.SID, "offline");
+            _config.SaveConfig();
+
+            Console.WriteLine($"[SYSTEM] Sensor {msg.SID} closed and saved as offline.");
+
+            // inform server that the sensor got disconnected
+            if (_serverClient != null && _serverClient.Connected) {
+                var fwdMsg = new Message { CMD = "DISCONN", SID = msg.SID, GID = GID };
+                await Message.SendMessageAsync(_serverClient, fwdMsg);
+                Console.WriteLine($"[FORWARD] Disconnection warning from {msg.SID} to server");
+            }
+        }
     }
 
     private static async Task HandleData(TcpClient client, Message msg) {
@@ -192,12 +229,30 @@ class Program {
         if (_activeSensors.ContainsKey(msg.SID)) {
             _activeSensors[msg.SID] = DateTime.Now;
 
-            var (_, zone, _, _, _) = _config.ValidateSensor(msg.SID);
+            var (_, zone, _, allowedTypes, _) = _config.ValidateSensor(msg.SID);
+            string dataType = msg.Data.ContainsKey("TYPE") ? msg.Data["TYPE"] : "UNKNOWN";
+
+            if (!allowedTypes.Contains(dataType)) {
+                Console.WriteLine($"[WARNING] {msg.SID} tried to send unsupported type: {dataType}");
+                var err = new Message { CMD = "MSG", SID = msg.SID, GID = GID };
+                err.Data["REF_CMD"] = "DATA";
+                err.Data["TYPE"] = "ERR";
+                err.Data["REASON"] = "UNSUPPORTED_TYPE";
+                await Message.SendMessageAsync(client, err);
+                return; // Corta a execução aqui
+            }
+
             msg.Data["ZONE"] = zone; 
 
             Console.WriteLine($"[DATA] {msg.SID} sent {msg.Data["VALUE"]} ({msg.Data["TYPE"]})");
 
-            // FORWARD TO CENTRAL SERVER
+            // Enviar ACK ao sensor
+            var ack = new Message { CMD = "MSG", SID = msg.SID, GID = GID };
+            ack.Data["REF_CMD"] = "DATA";
+            ack.Data["TYPE"] = "ACK";
+            await Message.SendMessageAsync(client, ack);
+
+            // Fwd to server
             if (_serverClient != null && _serverClient.Connected) {
                 var fwdMsg = new Message { CMD = "FWD", SID = msg.SID, GID = GID };
                 // Copy all data from the sensor to the new FWD command

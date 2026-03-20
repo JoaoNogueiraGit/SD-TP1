@@ -7,23 +7,88 @@ using Shared;
 class Program {
 
     private static TcpClient _gatewayClient;
-    private const int GatewayPort = 5000;
-    private const string GatewayIP = "127.0.0.1";
-    private const string SID = "S101";
+    private static int GatewayPort = 5000;
+    private static string GatewayIP = "127.0.0.1";
+    private static string SID = "S101";
 
     // State management
     private static bool _isAuthenticated = false;
     private static string _zone = "Unknown";
     static async Task Main(string[] args) {
 
-        Console.WriteLine($"Starting Sensor {SID}...");
+        // Read console args
+        if (args.Length >= 2) {
+            SID = args[0];
+            GatewayIP = args[1];
+        }
+
+        if (args.Length == 3) {
+            GatewayPort = int.Parse(args[2]);
+        }
+
+        Console.WriteLine($"[SYSTEM] Starting Sensor {SID} connecting to {GatewayIP}:{GatewayPort}...");
+        Console.WriteLine("==================================================");
+        Console.WriteLine(" Interactive Menu. Available commands:");
+        Console.WriteLine(" -> DATA <TYPE> <VALUE> (e.g., DATA HUM 65.2)");
+        Console.WriteLine(" -> DISCONN (to gracefully shutdown)");
+        Console.WriteLine("==================================================\n");
 
         // start parallel routines (will only send if authenticated)
         _ = Task.Run(HeartbeatRoutineAsync);
-        _ = Task.Run(DataGenerationRoutineAsync);
+        // _ = Task.Run(DataGenerationRoutineAsync);
+        _ = Task.Run(ConnectToGatewayLoopAsync);
 
-        // start the main connection loop 
-        await ConnectToGatewayLoopAsync();
+
+        while (true) {
+            var input = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(input)) continue;
+
+            // Split the user input by spaces
+            var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var command = parts[0].ToUpper();
+
+            if (command == "DISCONN") {
+                if (_isAuthenticated && _gatewayClient != null && _gatewayClient.Connected) {
+                    var byeMsg = new Message { CMD = "DISCONN", SID = SID };
+                    await Message.SendMessageAsync(_gatewayClient, byeMsg);
+                    Console.WriteLine("[SENSOR] Sent DISCONN. Shutting down...");
+                }
+                else {
+                    Console.WriteLine("[SENSOR] Shutting down (was not connected).");
+                }
+                break; // Exits the while loop and closes the app
+            }
+            else if (command == "DATA") {
+                if (!_isAuthenticated || _gatewayClient == null || !_gatewayClient.Connected) {
+                    Console.WriteLine("[WARNING] Cannot send data: Sensor is not authenticated with the Gateway.");
+                    continue;
+                }
+
+                // Ensure the user typed all 3 parts: DATA + TYPE + VALUE
+                if (parts.Length >= 3) {
+                    string dataType = parts[1].ToUpper();
+                    string dataValue = parts[2];
+
+                    var manualMsg = new Message { CMD = "DATA", SID = SID };
+                    manualMsg.Data["TYPE"] = dataType;
+                    manualMsg.Data["VALUE"] = dataValue;
+
+                    try {
+                        await Message.SendMessageAsync(_gatewayClient, manualMsg);
+                        Console.WriteLine($"[MANUAL] Sent {dataType}: {dataValue}");
+                    } catch (Exception ex) {
+                        Console.WriteLine($"[ERROR] Failed to send message: {ex.Message}");
+                        _isAuthenticated = false;
+                    }
+                }
+                else {
+                    Console.WriteLine("[ERROR] Invalid format. Use: DATA <TYPE> <VALUE>");
+                }
+            }
+            else {
+                Console.WriteLine("[ERROR] Unknown command. Use DATA or DISCONN.");
+            }
+        }
 
     }
 
@@ -64,7 +129,8 @@ class Program {
                 var msg = await Message.ReceiveMessageAsync(gateway);
                 if (msg == null) break; // Gateway closed the connection
 
-                Console.WriteLine($"[GATEWAY -> SENSOR] Command received: {msg.CMD}; Type: {msg.Data["TYPE"]}");
+                string msgType = msg.Data.ContainsKey("TYPE") ? msg.Data["TYPE"] : "N/A";
+                Console.WriteLine($"[GATEWAY -> SENSOR] Command received: {msg.CMD}; Type: {msgType}");
 
                 if (msg.CMD == "MSG" && msg.Data.ContainsKey("TYPE")) {
                     
@@ -93,7 +159,7 @@ class Program {
                 try {
                     var hbMsg = new Message { CMD = "HB", SID = SID };
                     await Message.SendMessageAsync(_gatewayClient, hbMsg);
-                    Console.WriteLine("[SENSOR] Sent HB"); // Uncomment to see in action
+                    // Console.WriteLine("[SENSOR] Sent HB"); // Uncomment to see in action
                 } catch {
                     _isAuthenticated = false;
                 }
