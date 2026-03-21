@@ -19,6 +19,9 @@ class Program {
     // Store for incomplete frames: Dictionary<SensorID, List<PartBytes>>
     private static ConcurrentDictionary<string, byte[][]> _videoBuffer = new();
 
+    // Registo da última imagem completa na RAM para o Web Server ler
+    private static ConcurrentDictionary<string, byte[]> _latestFrames = new();
+
     private static ConfigManager _config = new ConfigManager();
     // Registry of who's online right now (SID -> Last Activity)
     private static ConcurrentDictionary<string, DateTime> _activeSensors = new();
@@ -63,6 +66,9 @@ class Program {
         // inicia o listener de video udp
         _udpListener = new UdpClient(UdpPort);
         _ = Task.Run(ListenForVideoUdpAsync);
+
+        // starts web server
+        _ = Task.Run(StartWebServerAsync);
 
         while (true) {
             // Accept TCP connection async
@@ -303,7 +309,12 @@ class Program {
         if (action == "START") {
             _activeStreams.TryAdd(msg.SID, true);
             response.Data["TYPE"] = "ACK";
-            Console.WriteLine($"[STREAM CONTROL] The sensor {msg.SID} started video streaming");
+            Console.WriteLine($"[STREAM] The sensor {msg.SID} started video streaming");
+
+            // change output color 
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"    -> Live: http://localhost:8080/stream/{msg.SID}");
+            Console.ResetColor();
         } else if (action == "STOP") {
             _activeStreams.TryRemove(msg.SID, out _);
 
@@ -311,7 +322,15 @@ class Program {
             _videoBuffer.TryRemove(msg.SID, out _);
 
             response.Data["TYPE"] = "ACK";
-            Console.WriteLine($"[STREAM CONTROL] The sensor {msg.SID} stopped video streaming");
+            Console.WriteLine($"[STREAM] The sensor {msg.SID} stopped video streaming");
+        } else if (action == "PHOTO") {
+
+            // don't need to add to _activeStreams
+            // Just clean the previous buffer to ensure the photo is "fresh"
+            _videoBuffer.TryRemove(msg.SID, out _);
+            response.Data["TYPE"] = "ACK";
+            Console.WriteLine($"[STREAM] The sensor {msg.SID} sent a photo");
+
         } else {
             response.Data["TYPE"] = "ERR";
             response.Data["REASON"] = "INVALID_ACTION";
@@ -343,7 +362,7 @@ class Program {
                     continue;
                 }
 
-                if (!_activeStreams.ContainsKey(msg.SID)) {
+                if (!_activeStreams.ContainsKey(msg.SID) && msg.Data.GetValueOrDefault("TYPE", "") != "PHOTO_PART") {
                     Console.WriteLine($"[WARNING] Video package rejected. {msg.SID} didn's start STRM.");
                     continue;
                 }
@@ -363,19 +382,91 @@ class Program {
                 // Verify if not all parts of the array are null already
                 if (chunks.All(c => c != null)) {
                     byte[] fullImage = chunks.SelectMany(c => c).ToArray();
-                   
-                    string exactPath = Path.GetFullPath($"last_frame_{msg.SID}.jpg");
 
-                    await File.WriteAllBytesAsync(exactPath, fullImage);
+                    // Guarda a imagem na RAM para o servidor web aceder sem bloqueios
+                    _latestFrames[msg.SID] = fullImage;
+
+                    // Tenta guardar no disco (com try-catch seguro para ignorar conflitos)
+                    string exactPath = Path.GetFullPath($"last_frame_{msg.SID}.jpg");
+                    try {
+                        await File.WriteAllBytesAsync(exactPath, fullImage);
+                    } catch (IOException) {
+                        // Ignora em silêncio se o Windows estiver com o ficheiro bloqueado
+                    }
 
                     _videoBuffer.TryRemove(msg.SID, out _); // Limpa para a próxima
-
-                    // Console.WriteLine($"\n[VIDEO] Frame montado com sucesso!");
-                    // Console.WriteLine($"[Caminho do Ficheiro] ---> {caminhoExato}\n");
                 }
             }
         } catch (Exception ex) {
             Console.WriteLine($"[ERROR] {ex.Message}");
+        }
+    }
+
+    // WEB SERVER LOGIC (LIVE FEED)
+    private static async Task StartWebServerAsync() {
+
+        try {
+
+            var listener = new HttpListener();
+            listener.Prefixes.Add("http://localhost:8080/");
+            listener.Start();
+            Console.WriteLine("[WEB] Web Server active. Ready to stream");
+
+            while (true) {
+
+                var context = await listener.GetContextAsync();
+                var req = context.Request;
+                var res = context.Response;
+
+                try {
+
+                    if (req.Url.AbsolutePath.StartsWith("/stream/")) {
+                        string sid = req.Url.AbsolutePath.Split('/').Last();
+                        string html = $@"
+                            <!DOCTYPE html>
+                            <html>
+                            <body style='background:#1e1e1e;color:white;text-align:center;font-family:Segoe UI,Arial;'>
+                                <h2>Live Feed UDP: {sid}</h2>
+                                <img id='feed' src='/image/{sid}' style='max-width:800px;border:3px solid #007acc;border-radius:10px;' />
+                                <p style='color:#00ff00;font-weight:bold;'>LIVE | 5 FPS</p>
+                                <script>
+                                    // Pede uma nova imagem ao Gateway a cada 200ms
+                                    setInterval(() => document.getElementById('feed').src = '/image/{sid}?t=' + Date.now(), 200);
+                                </script>
+                            </body>
+                            </html>";
+
+
+                        byte[] buffer = System.Text.Encoding.UTF8.GetBytes(html);
+                        res.ContentType = "text/html";
+                        res.ContentLength64 = buffer.Length;
+                        await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+                    }
+                    else if (req.Url.AbsolutePath.StartsWith("/image/")) {
+                        string sid = req.Url.AbsolutePath.Split('/').Last();
+                   
+
+                        // Read from RAM
+                        if (_latestFrames.TryGetValue(sid, out byte[] imgBytes)) {
+                            res.ContentType = "image/jpeg";
+                            res.ContentLength64 = imgBytes.Length;
+                            await res.OutputStream.WriteAsync(imgBytes, 0, imgBytes.Length);
+                        }
+                        else {
+                            res.StatusCode = 404;
+                        }
+                    }
+                    else {
+                        res.StatusCode = 404;
+                    }
+
+                } finally {
+                    res.Close();
+                }
+            }
+
+        } catch (Exception ex) {
+            Console.WriteLine($"[WEB ERROR] {ex.Message}");
         }
     }
 }
