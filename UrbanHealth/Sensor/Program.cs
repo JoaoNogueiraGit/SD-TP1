@@ -62,6 +62,10 @@ class Program {
                     var byeMsg = new Message { CMD = "DISCONN", SID = SID };
                     await Message.SendMessageAsync(_gatewayClient, byeMsg);
                     Console.WriteLine("[SENSOR] Sent DISCONN. Shutting down...");
+
+
+                    // wait half second to allow network to send packet before windows kill process
+                    await Task.Delay(500);
                 }
                 else {
                     Console.WriteLine("[SENSOR] Shutting down (was not connected).");

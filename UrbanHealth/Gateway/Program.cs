@@ -35,6 +35,8 @@ class Program {
         // Launch the Server connection task in the background (will try to connect infinitely)
         _ = Task.Run(ConnectToServerLoopAsync);
 
+        _ = Task.Run(GatewayHeartbeatRoutineAsync);
+
         // Starts cleaning routine for inactive sensors
         _ = Task.Run(async () => {
             while (true) {
@@ -80,9 +82,7 @@ class Program {
         
     }
 
-    // =========================================================
-    // CENTRAL SERVER LOGIC (UPSTREAM)
-    // =========================================================
+    // SERVER LOGIC (UPSTREAM)
 
     private static async Task ConnectToServerLoopAsync() {
         var count = 0;
@@ -126,10 +126,24 @@ class Program {
         }
     }
 
+    private static async Task GatewayHeartbeatRoutineAsync() {
+        while (true) {
+            await Task.Delay(10000); // Beats every 10 secs
 
-    // =========================================================
+            if (_serverClient != null && _serverClient.Connected) {
+                try {
+                    var hbMsg = new Message { CMD = "HB", GID = GID };
+                    await Message.SendMessageAsync(_serverClient, hbMsg);
+                } catch {           
+                    // If send fails, the reconnection routine will recover the socket
+                }
+            }
+        }
+    }
+
+
     // SENSOR LOGIC (DOWNSTREAM)
-    // =========================================================
+
 
     private static async Task HandleSensorAsync(TcpClient client) {
         using (client) {
@@ -151,6 +165,12 @@ class Program {
                     sensorId = msg.SID;
                     Console.WriteLine($"[RECEIVED] Command: {msg.CMD} by {msg.SID}");
                     await ProcessMessage(client, msg);
+
+   
+                    // break out of the loop to not read a dead socket
+                    if (msg.CMD == "DISCONN") {
+                        break;
+                    }
                 }
             } catch (Exception ex) {
                 Console.WriteLine($"[ERROR] Failure in communication with {sensorId}: {ex.Message}");
