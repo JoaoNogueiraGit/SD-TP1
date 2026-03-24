@@ -35,6 +35,9 @@ namespace Server
 
         public async Task SaveReadingsAsync(Message msg)
         {
+            var semaphore = new SemaphoreSlim(1, 3);
+            await semaphore.WaitAsync();
+
             try
             {
                 using var connection = new SqliteConnection(_connectionString);
@@ -68,6 +71,10 @@ namespace Server
             catch (Exception ex)
             {
                 Console.WriteLine($"[DB ERROR] Reading not stored: {ex.Message}");
+            }
+            finally
+            {
+                semaphore.Release();
             }
         }
     }
