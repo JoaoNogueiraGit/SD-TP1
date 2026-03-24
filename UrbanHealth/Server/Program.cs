@@ -8,6 +8,13 @@ using Server;
 using Shared; // Your common library
 
 class Program {
+
+    private static UdpClient _udpListener;
+    private const int UdpPort = 5003;
+    private static ConcurrentDictionary<string, byte[][]> _videoBuffer = new();
+    private static ConcurrentDictionary<string, byte[]> _latestFrames = new();
+
+
     //private static StorageManager _storage = new StorageManager();
     private static DataBaseManager _dbManager = new DataBaseManager();
 
@@ -22,6 +29,12 @@ class Program {
 
         // starts cleaning routine of dead gateways
         _ = Task.Run(MonitorGatewaysAsync);
+
+
+        // Turn on UDP receptor and Web Server Dashboard
+        _udpListener = new UdpClient(UdpPort);
+        _ = Task.Run(ListenForVideoUdpAsync);
+        _ = Task.Run(StartWebDashboardAsync);
 
         while (true) {
             // Waits for a Gateway to connect
@@ -82,6 +95,13 @@ class Program {
                         //await _storage.Savemessage(msg);
                         await _dbManager.SaveReadingsAsync(msg);
                     }
+                    else if (msg.CMD == "FWD_STRM" && msg.Data.GetValueOrDefault("ACTION", "") == "START") {
+                        Console.WriteLine($"\n   -> [STREAM] Gateway {msg.GID} forwarded a video from Sensor {msg.SID}!");
+
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"   -> Live: http://localhost:8081/stream/{msg.SID}");
+                        Console.ResetColor();
+                    }
                     else if (msg.CMD == "HB") {
                         // if you want to see HB on the console just uncomment
                         // Console.WriteLine($"[HB] Gateway {msg.GID} is alive.");
@@ -91,6 +111,94 @@ class Program {
                 Console.WriteLine($"[ERROR] Failure in communication with Gateway {gatewayId}: {ex.Message}");
                 if (gatewayId != "Unknown") _activeGateways.TryRemove(gatewayId, out _);
             }
+        }
+    }
+
+    private static async Task ListenForVideoUdpAsync() {
+        Console.WriteLine($"[SERVER-VIDEO] UDP Listener ativo na porta {UdpPort}...");
+        try {
+            while (true) {
+                var result = await _udpListener.ReceiveAsync();
+                var msg = Message.FromUdpBytes(result.Buffer);
+
+                if (msg == null) continue;
+
+                int part = int.Parse(msg.Data["PART"]);
+                int total = int.Parse(msg.Data["TOTAL"]);
+
+                if (!_videoBuffer.TryGetValue(msg.SID, out var chunks) || chunks.Length != total) {
+                    chunks = new byte[total][];
+                    _videoBuffer[msg.SID] = chunks;
+                }
+                chunks[part - 1] = msg.BinaryData;
+
+                // If got all pieces, store in server RAM
+                if (chunks.All(c => c != null)) {
+                    byte[] fullImage = chunks.SelectMany(c => c).ToArray();
+                    _latestFrames[msg.SID] = fullImage;
+                    _videoBuffer.TryRemove(msg.SID, out _);
+                }
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[SERVER-VIDEO ERROR] {ex.Message}");
+        }
+    }
+
+    private static async Task StartWebDashboardAsync() {
+        try {
+            var listener = new HttpListener();
+            listener.Prefixes.Add("http://localhost:8081/");
+            listener.Start();
+            Console.WriteLine("[WEB] Web Server Ready");
+
+            while (true) {
+                var context = await listener.GetContextAsync();
+                var req = context.Request;
+                var res = context.Response;
+
+                try {
+                    if (req.Url.AbsolutePath.StartsWith("/stream/")) {
+                        string sid = req.Url.AbsolutePath.Split('/').Last();
+                        string html = $@"
+                            <!DOCTYPE html>
+                            <html>
+                            <body style='background:#0a0a0a;color:#00ff00;text-align:center;font-family:Consolas,monospace;'>
+                                <h2>[SERVER] Live Feed: {sid}</h2>
+                                <img id='feed' src='/image/{sid}' style='max-width:800px;border:2px solid #00ff00;' />
+                                <p>STATUS: REC | Forwarded by Gateway</p>
+                                <script>
+                                    setInterval(() => document.getElementById('feed').src = '/image/{sid}?t=' + Date.now(), 200);
+                                </script>
+                            </body>
+                            </html>";
+
+                        byte[] buffer = System.Text.Encoding.UTF8.GetBytes(html);
+                        res.ContentType = "text/html";
+                        res.ContentLength64 = buffer.Length;
+                        await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+                    }
+                    else if (req.Url.AbsolutePath.StartsWith("/image/")) {
+                        string sid = req.Url.AbsolutePath.Split('/').Last();
+
+                        // Read Server RAM
+                        if (_latestFrames.TryGetValue(sid, out byte[] imgBytes)) {
+                            res.ContentType = "image/jpeg";
+                            res.ContentLength64 = imgBytes.Length;
+                            await res.OutputStream.WriteAsync(imgBytes, 0, imgBytes.Length);
+                        }
+                        else {
+                            res.StatusCode = 404;
+                        }
+                    }
+                    else {
+                        res.StatusCode = 404;
+                    }
+                } finally {
+                    res.Close();
+                }
+            }
+        } catch (Exception ex) {
+            Console.WriteLine($"[WEB ERROR] {ex.Message}");
         }
     }
 }

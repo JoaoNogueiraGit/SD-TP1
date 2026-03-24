@@ -11,6 +11,9 @@ class Program {
     private static UdpClient _udpListener;
     private const int UdpPort = 5002;
 
+    private const int ServerUdpPort = 5003;
+    private static UdpClient _serverUdpClient = new UdpClient();
+
     private const int Port = 5000;
     private const string ServerIP = "127.0.0.1"; // Central Server IP
     private const int ServerPort = 5001;         // Central Server Port
@@ -119,7 +122,7 @@ class Program {
 
                 string msgType = msg.Data.ContainsKey("TYPE") ? msg.Data["TYPE"] : "N/A";
                 Console.WriteLine($"[SERVER -> GATEWAY] Command received: {msg.CMD}; Type: {msgType}");
-                // Here you can process ACKs from the server in the future
+                // Here we can process ACKs from the server in the future
             }
         } catch {
             Console.WriteLine("[GATEWAY] Connection to Server lost!");
@@ -335,6 +338,14 @@ class Program {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"    -> Live: http://localhost:8080/stream/{msg.SID}");
             Console.ResetColor();
+
+            // Let server know that stream started
+            if (_serverClient != null && _serverClient.Connected) {
+                var fwdStrm = new Message { CMD = "FWD_STRM", SID = msg.SID, GID = GID };
+                fwdStrm.Data["ACTION"] = "START";
+                _ = Message.SendMessageAsync(_serverClient, fwdStrm);
+            }
+
         } else if (action == "STOP") {
             _activeStreams.TryRemove(msg.SID, out _);
 
@@ -386,6 +397,11 @@ class Program {
                     Console.WriteLine($"[WARNING] Video package rejected. {msg.SID} didn's start STRM.");
                     continue;
                 }
+
+                // Forward UDP packet to server  
+                try {
+                    await _serverUdpClient.SendAsync(result.Buffer, result.Buffer.Length, ServerIP, ServerUdpPort);
+                } catch { }
 
                 int part = int.Parse(msg.Data["PART"]);
                 int total = int.Parse(msg.Data["TOTAL"]);
