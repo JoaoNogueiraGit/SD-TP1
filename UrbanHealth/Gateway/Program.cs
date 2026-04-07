@@ -15,7 +15,7 @@ class Program {
     private static UdpClient _serverUdpClient = new UdpClient();
 
     private const int Port = 5000;
-    private const string ServerIP = "127.0.0.1"; // Central Server IP
+    private const string ServerIP = "192.168.126.49"; // Central Server IP
     private const int ServerPort = 5001;         // Central Server Port
     private const string GID = "G101";
 
@@ -347,6 +347,14 @@ class Program {
                 var fwdMsg = new Message { CMD = "DISCONN", SID = msg.SID, GID = GID };
                 await Message.SendMessageAsync(_serverClient, fwdMsg);
                 Console.WriteLine($"[FORWARD] Disconnection warning from {msg.SID} to server");
+            }
+        } else if (msg.CMD == "DISCONN") {
+            if (msg.SID == "GATEWAY") {
+                // Special handling for gateway disconnection
+                Console.WriteLine("[SYSTEM] Gateway disconnection acknowledged by server.");
+            }
+            else { 
+                _activeSensors.TryRemove(msg.SID, out _);  // Novo!
             }
         }
     }

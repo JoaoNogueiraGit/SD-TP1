@@ -101,6 +101,7 @@ class Program {
                         Console.WriteLine($"[STATUS] Sensor {msg.SID} state: {msg.Data["STATUS"]}");
 
                         if (msg.Data["STATUS"] == "ONLINE") _activeSensors[msg.SID] = msg.GID;
+                        else if (msg.Data["STATUS"] == "OFFLINE") _activeSensors.TryRemove(msg.SID, out _);
                     }
                     else if (msg.CMD == "FWD") {
 
@@ -120,12 +121,17 @@ class Program {
                         Console.WriteLine($"   -> Live: http://localhost:8081/stream/{msg.SID}");
                         Console.ResetColor();
                     }
-                    else if (msg.CMD == "DISCONN" && msg.SID == "GATEWAY") {
-
-                        Console.WriteLine($"\n   -> [SHUTDOWN] Gateway {msg.GID} has shutdown his activity in a clean way..");
-                        if (gatewayId != "Unknown") _activeGateways.TryRemove(gatewayId, out _);
-                       
-                        break;
+                    else if (msg.CMD == "DISCONN") {
+                        if (msg.SID == "GATEWAY") {
+                            Console.WriteLine($"\n   -> [SHUTDOWN] Gateway {msg.GID} has shutdown his activity in a clean way..");
+                            if (gatewayId != "Unknown") _activeGateways.TryRemove(gatewayId, out _);
+                            break;
+                        }
+                        else {
+                            // Sensor disconnection
+                            Console.WriteLine($"   -> [DISCONNECT] Sensor {msg.SID} disconnected from Gateway {msg.GID}");
+                            _activeSensors.TryRemove(msg.SID, out _);
+                        }
                     }
                     else if (msg.CMD == "HB") {
                         // if you want to see HB on the console just uncomment
