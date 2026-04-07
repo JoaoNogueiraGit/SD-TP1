@@ -348,14 +348,6 @@ class Program {
                 await Message.SendMessageAsync(_serverClient, fwdMsg);
                 Console.WriteLine($"[FORWARD] Disconnection warning from {msg.SID} to server");
             }
-        } else if (msg.CMD == "DISCONN") {
-            if (msg.SID == "GATEWAY") {
-                // Special handling for gateway disconnection
-                Console.WriteLine("[SYSTEM] Gateway disconnection acknowledged by server.");
-            }
-            else { 
-                _activeSensors.TryRemove(msg.SID, out _);  // Novo!
-            }
         }
     }
 

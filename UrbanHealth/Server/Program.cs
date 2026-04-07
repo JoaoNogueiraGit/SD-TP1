@@ -97,11 +97,14 @@ class Program {
 
                     
                     if (msg.CMD == "STS") {
-                        Console.WriteLine($"   -> Gateway Status: {msg.Data["STATUS"]}");
-                        Console.WriteLine($"[STATUS] Sensor {msg.SID} state: {msg.Data["STATUS"]}");
+                        Console.WriteLine($"   -> Status Message: {msg.Data["STATUS"]} | SID: {msg.SID}");
 
-                        if (msg.Data["STATUS"] == "ONLINE") _activeSensors[msg.SID] = msg.GID;
-                        else if (msg.Data["STATUS"] == "OFFLINE") _activeSensors.TryRemove(msg.SID, out _);
+                        // Only process sensor status messages (not gateway status messages)
+                        if (!string.IsNullOrEmpty(msg.SID) && msg.SID != msg.GID) {
+                            Console.WriteLine($"[STATUS] Sensor {msg.SID} state: {msg.Data["STATUS"]}");
+                            if (msg.Data["STATUS"] == "ONLINE") _activeSensors[msg.SID] = msg.GID;
+                            else if (msg.Data["STATUS"] == "OFFLINE") _activeSensors.TryRemove(msg.SID, out _);
+                        }
                     }
                     else if (msg.CMD == "FWD") {
 
