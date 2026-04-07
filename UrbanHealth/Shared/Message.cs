@@ -76,27 +76,37 @@ namespace Shared {
         public static async Task<Message> ReceiveMessageAsync(TcpClient client) {
 
             var stream = client.GetStream();
-            var buffer = new byte[1024];
-            var messageBuilder = new StringBuilder();
+            var messageBytes = new List<byte>();
+            var buffer = new byte[1];
+            
 
             try {
 
-                while (!messageBuilder.ToString().Contains("<EOF>")) {
+                while (true) {
 
-                    int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+                    int bytesRead = await stream.ReadAsync(buffer, 0, 1);
 
-                    // if bytesRead is 0, then client disconnected
                     if (bytesRead == 0) return null;
 
-                    var part = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    messageBuilder.Append(part);
+                    messageBytes.Add(buffer[0]);
 
+                    int len = messageBytes.Count;
+
+                    // '<' = 60, 'E' = 69, 'O' = 79, 'F' = 70, '>' = 62
+                    if (len >= 5 &&
+                        messageBytes[len - 5] == '<' &&
+                        messageBytes[len - 4] == 'E' &&
+                        messageBytes[len - 3] == 'O' &&
+                        messageBytes[len - 2] == 'F' &&
+                        messageBytes[len - 1] == '>') {
+                        
+                        
+                        string fullRawMessage = Encoding.UTF8.GetString(messageBytes.ToArray());
+                        return Message.Parse(fullRawMessage);
+                    }
                 }
 
-                // when out of the loop, we have the complete message
-                string fullRawMessage = messageBuilder.ToString();
-
-                return Message.Parse(fullRawMessage);
+                
 
             } catch (Exception ex) {
 

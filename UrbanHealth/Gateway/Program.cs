@@ -32,6 +32,9 @@ class Program {
     // Registry of who's allowed to stream video right now
     private static ConcurrentDictionary<string, bool> _activeStreams = new();
 
+    // Registry of time to clean UDP frames that lost packets
+    private static ConcurrentDictionary<string, DateTime> _videoBufferTimestamps = new();
+
     static async Task Main(string[] args) {
         _config.LoadConfig();
 
@@ -40,10 +43,10 @@ class Program {
 
         _ = Task.Run(GatewayHeartbeatRoutineAsync);
 
-        // Starts cleaning routine for inactive sensors
+        // Starts cleaning routine for inactive sensors (and video buffer)
         _ = Task.Run(async () => {
             while (true) {
-                await Task.Delay(15000); // Checks every 15 seconds
+                await Task.Delay(2000); // Checks every 15 seconds
                 bool csvNeedsUpdate = false;
 
                 foreach (var sensor in _activeSensors) {
@@ -60,6 +63,17 @@ class Program {
                     _config.SaveConfig();
                     Console.WriteLine("[SYSTEM] Config file updated.");
                 }
+
+                // Garbage collector for UDP Video
+                foreach (var frameTime in _videoBufferTimestamps) {
+                    
+                    // If more than 1.5 seconds passed and the image didn't mount yet, discard
+                    if ((DateTime.Now - frameTime.Value).TotalSeconds > 1.5) {
+                        _videoBuffer.TryRemove(frameTime.Key, out _);
+                        _videoBufferTimestamps.TryRemove(frameTime.Key, out _);
+                        //Console.WriteLine($"[UDP CLEANUP] Incomplete frame from {frameTime.Key} discarded to free RAM.");
+                    }
+                }
             }
         });
 
@@ -75,14 +89,57 @@ class Program {
         // starts web server
         _ = Task.Run(StartWebServerAsync);
 
-        while (true) {
-            // Accept TCP connection async
-            var client = await _listener.AcceptTcpClientAsync();
-            Console.WriteLine($"[GATEWAY] New sensor detected. Initiating handler...");
-            _ = Task.Run(() => HandleSensorAsync(client));
-        }
+        Console.WriteLine("==================================================");
+        Console.WriteLine(" Gateway Menu. Available commands:");
+        Console.WriteLine(" -> DISCONN (to shutdown gateway in a clean way)");
+        Console.WriteLine("==================================================\n");
+
+        _ = Task.Run(AcceptSensorsLoopAsync);
 
         
+        while (true) {
+            var input = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(input)) continue;
+
+            var command = input.Trim().ToUpper();
+
+            if (command == "DISCONN") {
+                await PerformGracefulShutdownAsync();
+                break; 
+            }
+            else {
+                Console.WriteLine("[ERROR] Unknown command. Use DISCONN.");
+            }
+        }
+
+
+    }
+
+    private static async Task PerformGracefulShutdownAsync() {
+        Console.WriteLine("\n[SYSTEM] Shutting down...");
+
+        // Notify Server that we are going to shutdown
+        if (_serverClient != null && _serverClient.Connected) {
+            try {
+                var byeMsg = new Message { CMD = "DISCONN", GID = GID, SID = "GATEWAY" };
+                await Message.SendMessageAsync(_serverClient, byeMsg);
+                Console.WriteLine("[SHUTDOWN] Server notified with success.");
+
+                await Task.Delay(500);
+
+                _serverClient.Close();
+            } catch { }
+        }
+
+        // Stop listening new sensors and video
+        if (_listener != null) _listener.Stop();
+        if (_udpListener != null) _udpListener.Close();
+      
+        // Give 500ms to NIC send last packet before closing program
+        await Task.Delay(500);
+
+        Console.WriteLine("[SYSTEM] Gateway shutdown with success...");
+        Environment.Exit(0);
     }
 
     // SERVER LOGIC (UPSTREAM)
@@ -146,6 +203,19 @@ class Program {
 
 
     // SENSOR LOGIC (DOWNSTREAM)
+
+    private static async Task AcceptSensorsLoopAsync() {
+        while (true) {
+            try {
+                var client = await _listener.AcceptTcpClientAsync();
+                Console.WriteLine($"[GATEWAY] New sensor detected. Initiating handler...");
+                _ = Task.Run(() => HandleSensorAsync(client));
+            } catch {                
+                // if listener gets closed during shutdown, the error falls here silently and routine ends
+                break;
+            }
+        }
+    }
 
 
     private static async Task HandleSensorAsync(TcpClient client) {
@@ -239,6 +309,14 @@ class Program {
 
                 _activeSensors[msg.SID] = DateTime.Now;
                 Console.WriteLine($"[AUTH] Sensor {msg.SID} authorized in {zone}");
+
+                // inform server that the sensor got connected
+                if (_serverClient != null && _serverClient.Connected) {
+                    var statusMsg = new Message { CMD = "STS", SID = msg.SID, GID = GID };
+                    statusMsg.Data["STATUS"] = "ONLINE";
+                    await Message.SendMessageAsync(_serverClient, statusMsg);
+                    Console.WriteLine($"[FORWARD] Sensor {msg.SID} connected to gateway {msg.GID}.");
+                }
             }
 
         }
@@ -415,6 +493,8 @@ class Program {
 
                 // Console.WriteLine($"[DEBUG UDP] -> Guardei a parte {part} no buffer.");
 
+                _videoBufferTimestamps[msg.SID] = DateTime.Now;
+
                 // Verify if not all parts of the array are null already
                 if (chunks.All(c => c != null)) {
                     byte[] fullImage = chunks.SelectMany(c => c).ToArray();
@@ -431,6 +511,7 @@ class Program {
                     }
 
                     _videoBuffer.TryRemove(msg.SID, out _); // Limpa para a próxima
+                    _videoBufferTimestamps.TryRemove(msg.SID, out _);
                 }
             }
         } catch (Exception ex) {

@@ -66,6 +66,8 @@ class Program {
 
                     // wait half second to allow network to send packet before windows kill process
                     await Task.Delay(500);
+
+                    _gatewayClient.Close();
                 }
                 else {
                     Console.WriteLine("[SENSOR] Shutting down (was not connected).");

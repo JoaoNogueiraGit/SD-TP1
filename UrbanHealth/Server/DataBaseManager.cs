@@ -1,12 +1,16 @@
 ﻿using Microsoft.Data.Sqlite;
 using Shared;
 using System.Data;
+using System.Text.Json;
+using System.Collections.Generic;
 
 namespace Server
 {
     public class DataBaseManager
     {
         private readonly string _connectionString = "Data Source=onehealth_urbano.db";
+
+        private static readonly SemaphoreSlim _dbLock = new SemaphoreSlim(1, 1);
 
         public DataBaseManager()
         {
@@ -35,8 +39,7 @@ namespace Server
 
         public async Task SaveReadingsAsync(Message msg)
         {
-            var semaphore = new SemaphoreSlim(1, 3);
-            await semaphore.WaitAsync();
+            await _dbLock.WaitAsync();
 
             try
             {
@@ -74,8 +77,47 @@ namespace Server
             }
             finally
             {
-                semaphore.Release();
+                _dbLock.Release();
             }
+        }
+      
+        public async Task<string> GetRecentReadingsJsonAsync(int limit = 10) {
+            var readings = new List<Dictionary<string, string>>();
+
+            await _dbLock.WaitAsync();
+            try {
+                using var connection = new SqliteConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var selectCmd = connection.CreateCommand();
+
+                selectCmd.CommandText = @"
+                    SELECT Timestamp, SID, Zone, DataType, Value, GID
+                    FROM Readings 
+                    ORDER BY Id DESC 
+                    LIMIT $limit";
+                selectCmd.Parameters.AddWithValue("$limit", limit);
+
+                using var reader = await selectCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync()) {
+                    var row = new Dictionary<string, string>
+                    {
+                        { "Time", reader.GetString(0) },
+                        { "Sensor", reader.GetString(1) },
+                        { "Zone", reader.IsDBNull(2) ? "N/A" : reader.GetString(2) },
+                        { "Type", reader.GetString(3) },
+                        { "Value", reader.GetDouble(4).ToString("0.0") }
+                    };
+                    readings.Add(row);
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"[DB ERROR] Failed to read data: {ex.Message}");
+            } finally {
+                _dbLock.Release();
+            }
+
+            // Transform C# List in a JSON string
+            return JsonSerializer.Serialize(readings);
         }
     }
 }

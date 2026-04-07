@@ -13,6 +13,7 @@ class Program {
     private const int UdpPort = 5003;
     private static ConcurrentDictionary<string, byte[][]> _videoBuffer = new();
     private static ConcurrentDictionary<string, byte[]> _latestFrames = new();
+    private static ConcurrentDictionary<string, DateTime> _videoBufferTimestamps = new();
 
 
     //private static StorageManager _storage = new StorageManager();
@@ -20,6 +21,9 @@ class Program {
 
     // Registry of active gateways (GID -> Last Sync)
     private static ConcurrentDictionary<string, DateTime> _activeGateways = new();
+
+    private static ConcurrentDictionary<string, string> _activeSensors = new();
+
     static async Task Main(string[] args) {
         int port = 5001;
         var listener = new TcpListener(IPAddress.Any, port);
@@ -49,7 +53,7 @@ class Program {
 
         while (true) {
 
-            await Task.Delay(15000); // every 15 sec
+            await Task.Delay(2000); // every 2 sec
 
             foreach (var gw in _activeGateways) {
 
@@ -59,6 +63,14 @@ class Program {
                     _activeGateways.TryRemove(gw.Key, out _);
 
                     // we can implement some kind of external "alert" here
+                }
+            }
+
+            // Garbage collector for UDP Video
+            foreach (var frameTime in _videoBufferTimestamps) {
+                if ((DateTime.Now - frameTime.Value).TotalSeconds > 1.5) {
+                    _videoBuffer.TryRemove(frameTime.Key, out _);
+                    _videoBufferTimestamps.TryRemove(frameTime.Key, out _);
                 }
             }
         }
@@ -83,11 +95,17 @@ class Program {
                     // Prints the received command with emphasis
                     Console.WriteLine($"\n[RECEIVED] Command: {msg.CMD} | GID: {msg.GID}");
 
-                    // Visual treatment for the two commands we expect from the Gateway
+                    
                     if (msg.CMD == "STS") {
                         Console.WriteLine($"   -> Gateway Status: {msg.Data["STATUS"]}");
+                        Console.WriteLine($"[STATUS] Sensor {msg.SID} state: {msg.Data["STATUS"]}");
+
+                        if (msg.Data["STATUS"] == "ONLINE") _activeSensors[msg.SID] = msg.GID;
                     }
                     else if (msg.CMD == "FWD") {
+
+                        // _activeSensors[msg.SID] = msg.GID;
+
                         Console.WriteLine($"   -> Forwarded Data from Sensor: {msg.SID}");
                         Console.WriteLine($"   -> Injected Zone: {msg.Data["ZONE"]}");
                         Console.WriteLine($"   -> Reading: {msg.Data["TYPE"]} = {msg.Data["VALUE"]}");
@@ -102,6 +120,13 @@ class Program {
                         Console.WriteLine($"   -> Live: http://localhost:8081/stream/{msg.SID}");
                         Console.ResetColor();
                     }
+                    else if (msg.CMD == "DISCONN" && msg.SID == "GATEWAY") {
+
+                        Console.WriteLine($"\n   -> [SHUTDOWN] Gateway {msg.GID} has shutdown his activity in a clean way..");
+                        if (gatewayId != "Unknown") _activeGateways.TryRemove(gatewayId, out _);
+                       
+                        break;
+                    }
                     else if (msg.CMD == "HB") {
                         // if you want to see HB on the console just uncomment
                         // Console.WriteLine($"[HB] Gateway {msg.GID} is alive.");
@@ -115,7 +140,7 @@ class Program {
     }
 
     private static async Task ListenForVideoUdpAsync() {
-        Console.WriteLine($"[SERVER-VIDEO] UDP Listener ativo na porta {UdpPort}...");
+        Console.WriteLine($"[SERVER-VIDEO] UDP Listener active on port {UdpPort}...");
         try {
             while (true) {
                 var result = await _udpListener.ReceiveAsync();
@@ -132,11 +157,14 @@ class Program {
                 }
                 chunks[part - 1] = msg.BinaryData;
 
+                _videoBufferTimestamps[msg.SID] = DateTime.Now;
+
                 // If got all pieces, store in server RAM
                 if (chunks.All(c => c != null)) {
                     byte[] fullImage = chunks.SelectMany(c => c).ToArray();
                     _latestFrames[msg.SID] = fullImage;
                     _videoBuffer.TryRemove(msg.SID, out _);
+                    _videoBufferTimestamps.TryRemove(msg.SID, out _);
                 }
             }
         } catch (Exception ex) {
@@ -149,7 +177,7 @@ class Program {
             var listener = new HttpListener();
             listener.Prefixes.Add("http://localhost:8081/");
             listener.Start();
-            Console.WriteLine("[WEB] Web Server Ready");
+            Console.WriteLine("[WEB] Web Server Ready at http://localhost:8081/");
 
             while (true) {
                 var context = await listener.GetContextAsync();
@@ -157,21 +185,50 @@ class Program {
                 var res = context.Response;
 
                 try {
-                    if (req.Url.AbsolutePath.StartsWith("/stream/")) {
+
+                    if (req.Url.AbsolutePath == "/" || req.Url.AbsolutePath == "/index.html") {
+                        string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "index.html");
+
+                        if (File.Exists(path)) {
+                            byte[] htmlBytes = await File.ReadAllBytesAsync(path);
+                            res.ContentType = "text/html";
+                            res.ContentLength64 = htmlBytes.Length;
+                            await res.OutputStream.WriteAsync(htmlBytes, 0, htmlBytes.Length);
+                        }
+                        else {
+                            string erro = "<h1>index.html file not found on server folder!</h1>";
+                            byte[] buffer = System.Text.Encoding.UTF8.GetBytes(erro);
+                            res.ContentType = "text/html";
+                            res.ContentLength64 = buffer.Length;
+                            await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+                        }
+                    }
+                    else if (req.Url.AbsolutePath == "/api/status") {
+                        // Converte as chaves do dicionário de Gateways num array JSON (ex: ["G101", "G102"])
+                        string gwList = string.Join(",", _activeGateways.Keys.Select(k => $"\"{k}\""));
+
+                        string activeSensorsJson = "[" + string.Join(",", _activeSensors.Select(s => $"{{\"Sensor\":\"{s.Key}\", \"Gateway\":\"{s.Value}\"}}")) + "]";
+
+                        string jsonReadings = await _dbManager.GetRecentReadingsJsonAsync(50);
+
+                        // Agora passamos a lista real de Gateways em vez do Count
+                        string finalJson = $"{{\"gatewaysOnline\": [{gwList}], \"activeSensors\": {activeSensorsJson},  \"readings\": {jsonReadings}}}";
+
+                        byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(finalJson);
+                        res.ContentType = "application/json";
+                        res.ContentLength64 = jsonBytes.Length;
+                        res.AppendHeader("Access-Control-Allow-Origin", "*");
+                        await res.OutputStream.WriteAsync(jsonBytes, 0, jsonBytes.Length);
+                    }
+                    else if (req.Url.AbsolutePath.StartsWith("/stream/")) {
                         string sid = req.Url.AbsolutePath.Split('/').Last();
                         string html = $@"
                             <!DOCTYPE html>
-                            <html>
-                            <body style='background:#0a0a0a;color:#00ff00;text-align:center;font-family:Consolas,monospace;'>
+                            <html><body style='background:#0a0a0a;color:#00ff00;text-align:center;'>
                                 <h2>[SERVER] Live Feed: {sid}</h2>
                                 <img id='feed' src='/image/{sid}' style='max-width:800px;border:2px solid #00ff00;' />
-                                <p>STATUS: REC | Forwarded by Gateway</p>
-                                <script>
-                                    setInterval(() => document.getElementById('feed').src = '/image/{sid}?t=' + Date.now(), 200);
-                                </script>
-                            </body>
-                            </html>";
-
+                                <script>setInterval(() => document.getElementById('feed').src = '/image/{sid}?t=' + Date.now(), 200);</script>
+                            </body></html>";
                         byte[] buffer = System.Text.Encoding.UTF8.GetBytes(html);
                         res.ContentType = "text/html";
                         res.ContentLength64 = buffer.Length;
@@ -179,20 +236,14 @@ class Program {
                     }
                     else if (req.Url.AbsolutePath.StartsWith("/image/")) {
                         string sid = req.Url.AbsolutePath.Split('/').Last();
-
-                        // Read Server RAM
                         if (_latestFrames.TryGetValue(sid, out byte[] imgBytes)) {
                             res.ContentType = "image/jpeg";
                             res.ContentLength64 = imgBytes.Length;
                             await res.OutputStream.WriteAsync(imgBytes, 0, imgBytes.Length);
                         }
-                        else {
-                            res.StatusCode = 404;
-                        }
+                        else { res.StatusCode = 404; }
                     }
-                    else {
-                        res.StatusCode = 404;
-                    }
+                    else { res.StatusCode = 404; }
                 } finally {
                     res.Close();
                 }
