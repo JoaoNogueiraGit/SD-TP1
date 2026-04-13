@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Gateway;
 using Shared;
+using System.Text.Json;
 
 class Program {
     private static TcpListener _listener;
@@ -15,7 +16,7 @@ class Program {
     private static UdpClient _serverUdpClient = new UdpClient();
 
     private const int Port = 5000;
-    private const string ServerIP = "192.168.126.49"; // Central Server IP
+    private const string ServerIP = "127.0.0.1"; // Central Server IP
     private const int ServerPort = 5001;         // Central Server Port
     private const string GID = "G101";
 
@@ -35,6 +36,15 @@ class Program {
     // Registry of time to clean UDP frames that lost packets
     private static ConcurrentDictionary<string, DateTime> _videoBufferTimestamps = new();
 
+    // Registry of sensors and their DATA_TYPES (SID -> DataTypes[])
+    private static ConcurrentDictionary<string, string[]> _sensorsDatatypes = new();
+
+    // Buffer de Agregação (Batching): Guarda a (Hora exata, Valor)
+    private static ConcurrentDictionary<(string, string), ConcurrentBag<(DateTime, double)>> _valuesToForward = new();
+
+    // Used to generate "Jitter" (Random delay)
+    private static readonly Random _rnd = new Random();
+
     static async Task Main(string[] args) {
         _config.LoadConfig();
 
@@ -42,6 +52,8 @@ class Program {
         _ = Task.Run(ConnectToServerLoopAsync);
 
         _ = Task.Run(GatewayHeartbeatRoutineAsync);
+
+        _ = Task.Run(BatchDataRoutineAsync);
 
         // Starts cleaning routine for inactive sensors (and video buffer)
         _ = Task.Run(async () => {
@@ -115,6 +127,55 @@ class Program {
 
     }
 
+    private static async Task BatchDataRoutineAsync() {
+
+        int batchWindowMs = 30000; // Sent packets every 30 secs
+
+        while (true) {
+            await Task.Delay(batchWindowMs);
+
+            if (_serverClient == null || !_serverClient.Connected) continue;
+
+            foreach (var key in _valuesToForward.Keys) {
+
+                if (_valuesToForward.TryRemove(key, out var readingsBag)) {
+                    var snapshot = readingsBag.ToList();
+                    if (snapshot.Count == 0) continue;
+
+                    string sensorId = key.Item1;
+                    string dataType = key.Item2;
+                    var (_, zone, _, _, _) = _config.ValidateSensor(sensorId);
+                    
+                    // Transforms the list of Tuples in a list of dicts to be easy to convert to JSON
+                    var payloadList = new List<Dictionary<string, string>>();
+                    foreach (var item in snapshot) {
+                        payloadList.Add(new Dictionary<string, string> {
+                            { "Timestamp", item.Item1.ToString("o") }, // Timestamp
+                            { "Value", item.Item2.ToString(System.Globalization.CultureInfo.InvariantCulture) } // Valor
+                        });
+                    }
+
+                    // Create message
+                    var batchMsg = new Message { CMD = "FWD", SID = sensorId, GID = GID };
+                    batchMsg.Data["TYPE"] = dataType;
+                    batchMsg.Data["ZONE"] = zone;
+                    batchMsg.Data["BATCH_COUNT"] = snapshot.Count.ToString();
+
+                    batchMsg.Data["RAW_PAYLOAD"] = JsonSerializer.Serialize(payloadList);
+
+                    try {
+                        await Message.SendMessageAsync(_serverClient, batchMsg);
+                        Console.WriteLine($"[BATCHING] Packet of {snapshot.Count} readings of {sensorId} ({dataType}) sent.");
+                    } catch {
+                        // Rollback 
+                        var recoveryBag = _valuesToForward.GetOrAdd(key, _ => new ConcurrentBag<(DateTime, double)>());
+                        foreach (var value in snapshot) recoveryBag.Add(value);
+                    }
+                }
+            }
+        }
+    }
+
     private static async Task PerformGracefulShutdownAsync() {
         Console.WriteLine("\n[SYSTEM] Shutting down...");
 
@@ -145,29 +206,43 @@ class Program {
     // SERVER LOGIC (UPSTREAM)
 
     private static async Task ConnectToServerLoopAsync() {
-        var count = 0;
-        while (count < 5) {
+
+        int baseDelayMs = 2000; // Starts by waiting 2 seconds
+        int maxDelayMs = 60000;
+        int currentDelayMs = baseDelayMs;
+
+        while (true) {
             try {
                 _serverClient = new TcpClient();
-                Console.WriteLine("[GATEWAY] Trying to connect to Central Server...");
-                await _serverClient.ConnectAsync(ServerIP, ServerPort);
-                Console.WriteLine("[GATEWAY] Connected to Central Server!");
+                Console.WriteLine($"[GATEWAY] Trying to connect to Server ({ServerIP}:{ServerPort})...");
 
-                // Notify the server that we are online
+                await _serverClient.ConnectAsync(ServerIP, ServerPort);
+                Console.WriteLine("[GATEWAY] Connected to Server!");
+                
+                // Reset the timer
+                currentDelayMs = baseDelayMs;
+
+                // Let server know we are online
                 var sts = new Message { CMD = "STS", GID = GID };
                 sts.Data["STATUS"] = "ONLINE";
                 await Message.SendMessageAsync(_serverClient, sts);
 
-                // Keep listening to server orders until the connection drops
                 await ListenToServerAsync(_serverClient);
             } catch {
-                // Failed or connection dropped. Silence the error and try again.
-                Console.WriteLine("[GATEWAY] Server offline. Retrying in 5 seconds...");
-                count++;
+                
             }
+            
+            // Exponential backoff with jitter
 
-            // Wait before trying to reconnect
-            await Task.Delay(5000);
+            // Adds between 0 and 1000 random ms (Jitter)
+            int jitter = _rnd.Next(0, 1000);
+            int sleepTime = currentDelayMs + jitter;
+
+            Console.WriteLine($"[GATEWAY] Inaccessible Server. New try in {sleepTime / 1000.0:F1} seconds...");
+            await Task.Delay(sleepTime);
+            
+            // Multiply time by 2, but dont go over maxDelayMs
+            currentDelayMs = Math.Min(currentDelayMs * 2, maxDelayMs);
         }
     }
 
@@ -269,7 +344,7 @@ class Program {
                 if (_activeSensors.ContainsKey(msg.SID)) {
                     _activeSensors[msg.SID] = DateTime.Now;
                     _config.UpdateLastSync(msg.SID);
-                    Console.WriteLine($"[HB] {msg.SID} is alive.");
+                    // Console.WriteLine($"[HB] {msg.SID} is alive.");
                 }
                 break;
 
@@ -379,20 +454,18 @@ class Program {
             ack.Data["TYPE"] = "ACK";
             await Message.SendMessageAsync(client, ack);
 
-            // Fwd to server
-            if (_serverClient != null && _serverClient.Connected) {
-                var fwdMsg = new Message { CMD = "FWD", SID = msg.SID, GID = GID };
-                // Copy all data from the sensor to the new FWD command
-                foreach (var kvp in msg.Data) {
-                    fwdMsg.Data[kvp.Key] = kvp.Value;
-                }
+            if (double.TryParse(msg.Data["VALUE"], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double sensorValue)) {
 
-                await Message.SendMessageAsync(_serverClient, fwdMsg);
-                Console.WriteLine($"[FORWARD] Data from {msg.SID} sent to Server.");
+                var bufferKey = (msg.SID, dataType);
+                var readingsBag = _valuesToForward.GetOrAdd(bufferKey, _ => new ConcurrentBag<(DateTime, double)>());
+
+                readingsBag.Add((DateTime.Now, sensorValue));
+
             }
             else {
-                Console.WriteLine($"[WARNING] Data from {msg.SID} discarded: Server is not connected.");
+                Console.WriteLine($"[ERROR] Não foi possível converter o valor '{msg.Data["VALUE"]}' para número.");
             }
+
         }
     }
 
@@ -402,12 +475,16 @@ class Program {
 
         if (!_activeSensors.ContainsKey(msg.SID)) return; // only online sensors can ask permission to stream
 
+        var (_, _, _, allowedTypes, _) = _config.ValidateSensor(msg.SID);
+        allowedTypes.Split(',');
+        bool isCapableOfStreaming = allowedTypes.Contains("VIDEO");
+
         string action = msg.Data.ContainsKey("ACTION") ? msg.Data["ACTION"].ToUpper() : "";
 
         var response = new Message { CMD = "MSG", SID = msg.SID, GID = GID };
         response.Data["REF_CMD"] = "STRM";
 
-        if (action == "START") {
+        if (action == "START" && isCapableOfStreaming) {
             _activeStreams.TryAdd(msg.SID, true);
             response.Data["TYPE"] = "ACK";
             Console.WriteLine($"[STREAM] The sensor {msg.SID} started video streaming");

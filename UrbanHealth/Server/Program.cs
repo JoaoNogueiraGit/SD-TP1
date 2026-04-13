@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Server;
 using Shared; // Your common library
@@ -108,14 +109,30 @@ class Program {
                     }
                     else if (msg.CMD == "FWD") {
 
-                        // _activeSensors[msg.SID] = msg.GID;
+                        Console.WriteLine($"\n   -> [BATCHING] Gateway {msg.GID} sent batch of data from Sensor: {msg.SID}");
+                        Console.WriteLine($"   -> Zone: {msg.Data.GetValueOrDefault("ZONE", "N/A")} | Type: {msg.Data["TYPE"]}");
+                        Console.WriteLine($"   -> Total of readings: {msg.Data["BATCH_COUNT"]}");
 
-                        Console.WriteLine($"   -> Forwarded Data from Sensor: {msg.SID}");
-                        Console.WriteLine($"   -> Injected Zone: {msg.Data["ZONE"]}");
-                        Console.WriteLine($"   -> Reading: {msg.Data["TYPE"]} = {msg.Data["VALUE"]}");
+                        // Extract and convert JSON back to list
+                        string rawPayloadJson = msg.Data["RAW_PAYLOAD"];
+                        var rawReadings = JsonSerializer.Deserialize<List<Dictionary<string, string>>>(rawPayloadJson);
 
-                        //await _storage.Savemessage(msg);
-                        await _dbManager.SaveReadingsAsync(msg);
+                        if (rawReadings != null) {
+                            foreach (var reading in rawReadings) {
+                                // Clone message
+                                var individualMsg = new Message {
+                                    CMD = "FWD",
+                                    SID = msg.SID,
+                                    GID = msg.GID,
+                                    Timestamp = reading["Timestamp"] // Restore original timestamp
+                                };
+                                individualMsg.Data["TYPE"] = msg.Data["TYPE"];
+                                individualMsg.Data["ZONE"] = msg.Data["ZONE"];
+                                individualMsg.Data["VALUE"] = reading["Value"];
+
+                                await _dbManager.SaveReadingsAsync(individualMsg);
+                            }
+                        }
                     }
                     else if (msg.CMD == "FWD_STRM" && msg.Data.GetValueOrDefault("ACTION", "") == "START") {
                         Console.WriteLine($"\n   -> [STREAM] Gateway {msg.GID} forwarded a video from Sensor {msg.SID}!");
