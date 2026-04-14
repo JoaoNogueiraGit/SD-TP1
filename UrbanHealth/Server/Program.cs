@@ -201,9 +201,17 @@ class Program {
     private static async Task StartWebDashboardAsync() {
         try {
             var listener = new HttpListener();
-            listener.Prefixes.Add("http://*:8081/");
+
+            // Se estivermos no Docker, usamos *, se estivermos no Windows local, usamos localhost
+            if (Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true") {
+                listener.Prefixes.Add("http://*:8081/");
+            }
+            else {
+                listener.Prefixes.Add("http://localhost:8081/");
+            }
+
             listener.Start();
-            Console.WriteLine("[WEB] Web Server Ready at http://localhost:8081/");
+            Console.WriteLine($"[WEB] Dashboard Ready: http://localhost:8081/");
 
             while (true) {
                 var context = await listener.GetContextAsync();
@@ -219,62 +227,69 @@ class Program {
         var res = context.Response;
 
         try {
-            if (req.Url.AbsolutePath == "/" || req.Url.AbsolutePath == "/index.html") {
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "index.html");
+            res.AppendHeader("Access-Control-Allow-Origin", "*");
+            string path = req.Url.AbsolutePath;
 
-                if (File.Exists(path)) {
-                    byte[] htmlBytes = await File.ReadAllBytesAsync(path);
-                    res.ContentType = "text/html";
-                    res.ContentLength64 = htmlBytes.Length;
-                    await res.OutputStream.WriteAsync(htmlBytes, 0, htmlBytes.Length);
-                }
-                else {
-                    string erro = "<h1>index.html file not found on server folder!</h1>";
-                    byte[] buffer = System.Text.Encoding.UTF8.GetBytes(erro);
-                    res.ContentType = "text/html";
-                    res.ContentLength64 = buffer.Length;
-                    await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
-                }
-            }
-            else if (req.Url.AbsolutePath == "/api/status") {
-                string gwList = string.Join(",", _activeGateways.Keys.Select(k => $"\"{k}\""));
-                string activeSensorsJson = "[" + string.Join(",", _activeSensors.Select(s => $"{{\"Sensor\":\"{s.Key}\", \"Gateway\":\"{s.Value}\"}}")) + "]";
-                string jsonReadings = await _dbManager.GetRecentReadingsJsonAsync(50);
-
-                string finalJson = $"{{\"gatewaysOnline\": [{gwList}], \"activeSensors\": {activeSensorsJson},  \"readings\": {jsonReadings}}}";
-
-                byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(finalJson);
-                res.ContentType = "application/json";
-                res.ContentLength64 = jsonBytes.Length;
-                res.AppendHeader("Access-Control-Allow-Origin", "*");
-                await res.OutputStream.WriteAsync(jsonBytes, 0, jsonBytes.Length);
-            }
-            else if (req.Url.AbsolutePath.StartsWith("/stream/")) {
-                string sid = req.Url.AbsolutePath.Split('/').Last();
-                string html = $@"
-                    <!DOCTYPE html>
-                    <html><body style='background:#0a0a0a;color:#00ff00;text-align:center;'>
-                        <h2>[SERVER] Live Feed: {sid}</h2>
-                        <img id='feed' src='/image/{sid}' style='max-width:800px;border:2px solid #00ff00;' />
-                        <script>setInterval(() => document.getElementById('feed').src = '/image/{sid}?t=' + Date.now(), 200);</script>
-                    </body></html>";
-                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(html);
+            if (path == "/" || path == "/index.html") {
+                string filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "index.html");
+                byte[] content = File.Exists(filePath) ? await File.ReadAllBytesAsync(filePath) : System.Text.Encoding.UTF8.GetBytes("<h1>index.html not found!</h1>");
                 res.ContentType = "text/html";
-                res.ContentLength64 = buffer.Length;
+                await res.OutputStream.WriteAsync(content, 0, content.Length);
+            }
+            else if (path == "/api/status") {
+                var status = new {
+                    gatewaysOnline = _activeGateways.Keys.ToList(),
+                    activeSensors = _activeSensors.Select(s => new { Sensor = s.Key, Gateway = s.Value }).ToList(),
+                    readings = JsonSerializer.Deserialize<JsonElement>(await _dbManager.GetRecentReadingsJsonAsync(50))
+                };
+                byte[] json = JsonSerializer.SerializeToUtf8Bytes(status);
+                res.ContentType = "application/json";
+                await res.OutputStream.WriteAsync(json, 0, json.Length);
+            }
+            else if (path == "/api/zones") {
+                string json = await _dbManager.GetAvailableZonesJsonAsync();
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                res.ContentType = "application/json";
                 await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
             }
-            else if (req.Url.AbsolutePath.StartsWith("/image/")) {
-                string sid = req.Url.AbsolutePath.Split('/').Last();
-                if (_latestFrames.TryGetValue(sid, out byte[] imgBytes)) {
+            else if (path == "/api/types") {
+                string json = await _dbManager.GetAvailableTypesJsonAsync();
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                res.ContentType = "application/json";
+                await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+            }
+            else if (path.StartsWith("/api/sensors")) {
+                var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
+                string json = await _dbManager.GetAvailableSensorsJsonAsync(query["zone"], query["type"]);
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                res.ContentType = "application/json";
+                await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+            }
+            else if (path.StartsWith("/api/stats")) {
+                var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
+                string json = await _dbManager.GetStatisticsJsonAsync(query["zone"], query["type"], query["sensor"]);
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(json);
+                res.ContentType = "application/json";
+                await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+            }
+            else if (path.StartsWith("/stream/")) {
+                string sid = path.Split('/').Last();
+                string html = $"<html><body style='background:#000;color:#0f0;text-align:center;'><h2>Stream: {sid}</h2><img id='f' src='/image/{sid}' style='max-width:800px;'/><script>setInterval(()=>document.getElementById('f').src='/image/{sid}?'+Date.now(),200);</script></body></html>";
+                byte[] buffer = System.Text.Encoding.UTF8.GetBytes(html);
+                res.ContentType = "text/html";
+                await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
+            }
+            else if (path.StartsWith("/image/")) {
+                string sid = path.Split('/').Last();
+                if (_latestFrames.TryGetValue(sid, out byte[] img)) {
                     res.ContentType = "image/jpeg";
-                    res.ContentLength64 = imgBytes.Length;
-                    await res.OutputStream.WriteAsync(imgBytes, 0, imgBytes.Length);
+                    await res.OutputStream.WriteAsync(img, 0, img.Length);
                 }
                 else { res.StatusCode = 404; }
             }
             else { res.StatusCode = 404; }
         } catch (Exception ex) {
-            Console.WriteLine($"[WEB REQUEST ERROR] {ex.Message}");
+            Console.WriteLine($"[WEB ERROR] Request: {ex.Message}");
         } finally {
             res.Close();
         }

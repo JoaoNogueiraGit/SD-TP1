@@ -157,5 +157,170 @@ namespace Server {
 
             return JsonSerializer.Serialize(readings);
         }
+
+        public async Task<string> GetStatisticsJsonAsync(string zone = null, string dataType = null, string sensor = null) {
+            var stats = new Dictionary<string, object>();
+            var readings = new List<double>();
+            var timestamps = new List<string>();
+
+            try {
+                using var connection = new SqliteConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var selectCmd = connection.CreateCommand();
+
+                string whereClause = "";
+                if (!string.IsNullOrEmpty(zone) && zone != "ALL") {
+                    whereClause += $" WHERE Zone = '{zone.Replace("'", "''")}'";
+                }
+                if (!string.IsNullOrEmpty(dataType) && dataType != "ALL") {
+                    if (whereClause.Length > 0) whereClause += " AND";
+                    else whereClause += " WHERE";
+                    whereClause += $" Datatype = '{dataType.Replace("'", "''")}'";
+                }
+                if (!string.IsNullOrEmpty(sensor) && sensor != "ALL") {
+                    if (whereClause.Length > 0) whereClause += " AND";
+                    else whereClause += " WHERE";
+                    whereClause += $" SID = '{sensor.Replace("'", "''")}'";
+                }
+
+                selectCmd.CommandText = @$"
+                    SELECT Timestamp, Value 
+                    FROM Readings 
+                    {whereClause}
+                    ORDER BY Timestamp DESC
+                    LIMIT 1000";
+
+                using var reader = await selectCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync()) {
+                    timestamps.Add(reader.GetString(0));
+                    readings.Add(reader.GetDouble(1));
+                }
+
+                if (readings.Count == 0) {
+                    stats["error"] = "No data available for the selected filters";
+                    return JsonSerializer.Serialize(stats);
+                }
+
+                // Calculate statistics
+                double mean = readings.Average();
+                double variance = readings.Sum(x => Math.Pow(x - mean, 2)) / readings.Count;
+                double stdDev = Math.Sqrt(variance);
+                double min = readings.Min();
+                double max = readings.Max();
+                double median = GetMedian(readings);
+
+                stats["count"] = readings.Count;
+                stats["mean"] = Math.Round(mean, 2);
+                stats["median"] = Math.Round(median, 2);
+                stats["stdDev"] = Math.Round(stdDev, 2);
+                stats["min"] = Math.Round(min, 2);
+                stats["max"] = Math.Round(max, 2);
+                stats["zone"] = zone ?? "ALL";
+                stats["dataType"] = dataType ?? "ALL";
+                stats["values"] = readings.Select(v => Math.Round(v, 2)).ToList();
+                stats["timestamps"] = timestamps;
+            } catch (Exception ex) {
+                Console.WriteLine($"[DB ERROR] Failed to calculate statistics: {ex.Message}");
+                stats["error"] = $"Error calculating statistics: {ex.Message}";
+            }
+
+            return JsonSerializer.Serialize(stats);
+        }
+
+        public async Task<string> GetAvailableZonesJsonAsync() {
+            var zones = new HashSet<string>();
+
+            try {
+                using var connection = new SqliteConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var selectCmd = connection.CreateCommand();
+                selectCmd.CommandText = "SELECT DISTINCT Zone FROM Readings ORDER BY Zone";
+
+                using var reader = await selectCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync()) {
+                    zones.Add(reader.GetString(0));
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"[DB ERROR] Failed to get zones: {ex.Message}");
+            }
+
+            return JsonSerializer.Serialize(zones.OrderBy(z => z).ToList());
+        }
+
+        public async Task<string> GetAvailableTypesJsonAsync() {
+            var types = new HashSet<string>();
+
+            try {
+                using var connection = new SqliteConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var selectCmd = connection.CreateCommand();
+                selectCmd.CommandText = "SELECT DISTINCT Datatype FROM Readings ORDER BY Datatype";
+
+                using var reader = await selectCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync()) {
+                    types.Add(reader.GetString(0));
+                }
+            } catch (Exception ex) {
+                Console.WriteLine($"[DB ERROR] Failed to get types: {ex.Message}");
+            }
+
+            return JsonSerializer.Serialize(types.OrderBy(t => t).ToList());
+        }
+
+        public async Task<string> GetAvailableSensorsJsonAsync(string zone = null, string dataType = null)
+        {
+            var sensors = new HashSet<string>();
+
+            try
+            {
+                using var connection = new SqliteConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var selectCmd = connection.CreateCommand();
+
+                string whereClause = "";
+                if (!string.IsNullOrEmpty(zone) && zone != "ALL")
+                {
+                    whereClause += $" WHERE Zone = '{zone.Replace("'", "''")}'";
+                }
+                if (!string.IsNullOrEmpty(dataType) && dataType != "ALL")
+                {
+                    if (whereClause.Length > 0) whereClause += " AND";
+                    else whereClause += " WHERE";
+                    whereClause += $" Datatype = '{dataType.Replace("'", "''")}'";
+                }
+
+                selectCmd.CommandText = $@"
+                    SELECT DISTINCT SID 
+                    FROM Readings 
+                    {whereClause}
+                    ORDER BY SID";
+
+                using var reader = await selectCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    sensors.Add(reader.GetString(0));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB ERROR] Failed to get sensors: {ex.Message}");
+            }
+
+            return JsonSerializer.Serialize(sensors.OrderBy(s => s).ToList());
+        }
+
+        private double GetMedian(List<double> values) {
+            var sorted = values.OrderBy(x => x).ToList();
+            int count = sorted.Count;
+            if (count % 2 == 0) {
+                return (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0;
+            } else {
+                return sorted[count / 2];
+            }
+        }
     }
 }
