@@ -558,8 +558,11 @@
 
             globalData.readings.slice(0, 10).forEach(function (r) {
                 var cls = 'val-normal', suffix = '';
-                if (r.Type === 'TEMP') { suffix = ' \u00B0C'; if (parseFloat(r.Value) > 28) { cls = 'val-high'; alertCount++; } }
-                else if (r.Type === 'HUM') { suffix = ' %'; if (parseFloat(r.Value) > 70) { cls = 'val-high'; alertCount++; } }
+
+                var val = parseFloat(r.Value);
+
+                if (r.Type === 'TEMP') { suffix = ' \u00B0C'; if (val > 28) { cls = 'val-high'; alertCount++; } }
+                else if (r.Type === 'HUM') { suffix = ' %'; if (val > 70) { cls = 'val-high'; alertCount++; } }
                 else if (r.Type === 'CO2') { suffix = ' ppm'; if (val > 800) { cls = 'val-high'; alertCount++; } }
                 else if (r.Type === 'NOISE') { suffix = ' dB'; if (val > 75) { cls = 'val-high'; alertCount++; } }
                 else if (r.Type === 'PM2') { suffix = ' ug/m³'; if (val > 35) { cls = 'val-high'; alertCount++; } }
