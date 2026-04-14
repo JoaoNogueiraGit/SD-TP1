@@ -241,20 +241,48 @@ class Program {
     private static async Task DataGenerationRoutineAsync() {
         Random rnd = new Random();
 
+        // Lista dos tipos de dados suportados pelo nosso Sensor
+        string[] supportedTypes = { "TEMP", "HUM", "PM2", "CO2", "NOISE", "UV" };
+
         while (true) {
-            await Task.Delay(7000); // Generate data every 7 seconds
+            await Task.Delay(7000); // Gera um dado a cada 7 segundos
 
             if (_isAuthenticated && _gatewayClient != null && _gatewayClient.Connected) {
                 try {
                     var dataMsg = new Message { CMD = "DATA", SID = SID };
-                    dataMsg.Data["TYPE"] = "TEMP";
 
-                    // Generate random temperature between 15.0 and 30.0
-                    double temp = 15.0 + (rnd.NextDouble() * 15.0);
-                    dataMsg.Data["VALUE"] = temp.ToString("0.0");
+                    // Escolhe um tipo de dados aleatoriamente
+                    string selectedType = supportedTypes[rnd.Next(supportedTypes.Length)];
+                    dataMsg.Data["TYPE"] = selectedType;
+
+                    double value = 0;
+
+                    // Gera valores realistas baseados no tipo
+                    switch (selectedType) {
+                        case "TEMP":  // Temperature (15 to 35 °C)
+                            value = 15.0 + (rnd.NextDouble() * 20.0);
+                            break;
+                        case "HUM":   // Humidity (40 to 80 %)
+                            value = 40.0 + (rnd.NextDouble() * 40.0);
+                            break;
+                        case "PM2":   // Quality of air - particles (5 to 50 µg/m³)
+                            value = 5.0 + (rnd.NextDouble() * 45.0);
+                            break;
+                        case "CO2":   // Carbon Dioxide (400 to 1000 ppm)
+                            value = 400.0 + (rnd.NextDouble() * 600.0);
+                            break;
+                        case "NOISE": // Noise Pollution (40 to 90 dB)
+                            value = 40.0 + (rnd.NextDouble() * 50.0);
+                            break;
+                        case "UV":    // UV (0 to 10)
+                            value = rnd.NextDouble() * 10.0;
+                            break;
+                    }
+
+                    dataMsg.Data["VALUE"] = value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
                     await Message.SendMessageAsync(_gatewayClient, dataMsg);
-                    Console.WriteLine($"[DATA] Sent TEMP: {dataMsg.Data["VALUE"]}°C");
+                    Console.WriteLine($"[DATA] {selectedType}: {dataMsg.Data["VALUE"]}");
                 } catch {
                     _isAuthenticated = false;
                     _isStreaming = false;
