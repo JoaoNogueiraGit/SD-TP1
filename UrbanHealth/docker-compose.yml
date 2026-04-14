@@ -1,0 +1,17 @@
+services:
+  urban-health-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: urban-server-central
+    restart: always
+    ports:
+      - "5001:5001"       # Canal TCP para Gateways
+      - "5003:5003/udp"   # Canal UDP para Vídeo
+      - "8081:8081"       # Dashboard Web
+    volumes:
+      # Sincroniza a base de dados entre o PC e o contentor
+      - ./database_data:/app/data
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - DB_PATH=/app/data/urbanhealth.db

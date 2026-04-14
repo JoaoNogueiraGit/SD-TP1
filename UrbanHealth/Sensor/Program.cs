@@ -84,9 +84,8 @@ class Program {
 
                 if (parts.Length >= 2) {
                     string action = parts[1].ToUpper();
-
-                    // CORREÇÃO: Permitir START, STOP ou PHOTO
-                    if (action == "START" || action == "STOP" || action == "PHOTO") {
+                    
+                    if (action == "START" || action == "STOP") {
                         _requestedStreamAction = action;
 
                         var strmMsg = new Message { CMD = "STRM", SID = SID };
@@ -95,10 +94,10 @@ class Program {
                         await Message.SendMessageAsync(_gatewayClient, strmMsg);
                         Console.WriteLine($"[SENSOR] Sent STRM {action}, waiting for authorization...");
 
-                        // if its PHOTO, send immediatly 
-                        if (action == "PHOTO") {
-                            _ = Task.Run(() => SendSinglePhotoAsync("frame.jpg"));
-                        }
+                        //// if its PHOTO, send immediatly 
+                        //if (action == "PHOTO") {
+                        //    _ = Task.Run(() => SendSinglePhotoAsync("frame.jpg"));
+                        //}
                     }
                     else {
                         Console.WriteLine("[ERROR] Invalid action. Use: STRM START, STOP or PHOTO");
@@ -328,32 +327,32 @@ class Program {
         }
     }
 
-    private static async Task SendSinglePhotoAsync(string filePath) {
-        using var udpClient = new UdpClient();
-        const int chunkSize = 1400;
+    //private static async Task SendSinglePhotoAsync(string filePath) {
+    //    using var udpClient = new UdpClient();
+    //    const int chunkSize = 1400;
 
-        if (File.Exists(filePath)) {
-            byte[] imageBytes = await File.ReadAllBytesAsync(filePath);
-            int totalParts = (int)Math.Ceiling((double)imageBytes.Length / chunkSize);
+    //    if (File.Exists(filePath)) {
+    //        byte[] imageBytes = await File.ReadAllBytesAsync(filePath);
+    //        int totalParts = (int)Math.Ceiling((double)imageBytes.Length / chunkSize);
 
-            for (int i = 0; i < totalParts; i++) {
-                int currentOffset = i * chunkSize;
-                int size = Math.Min(chunkSize, imageBytes.Length - currentOffset);
-                byte[] buffer = new byte[size];
-                Buffer.BlockCopy(imageBytes, currentOffset, buffer, 0, size);
+    //        for (int i = 0; i < totalParts; i++) {
+    //            int currentOffset = i * chunkSize;
+    //            int size = Math.Min(chunkSize, imageBytes.Length - currentOffset);
+    //            byte[] buffer = new byte[size];
+    //            Buffer.BlockCopy(imageBytes, currentOffset, buffer, 0, size);
 
-                var msg = new Message { CMD = "STRM", SID = SID, GID = "G101" };
-                msg.Data["TYPE"] = "PHOTO_PART"; // Special flag so the gateway allows
-                msg.Data["PART"] = (i + 1).ToString();
-                msg.Data["TOTAL"] = totalParts.ToString();
-                msg.BinaryData = buffer;
+    //            var msg = new Message { CMD = "STRM", SID = SID, GID = "G101" };
+    //            msg.Data["TYPE"] = "PHOTO_PART"; // Special flag so the gateway allows
+    //            msg.Data["PART"] = (i + 1).ToString();
+    //            msg.Data["TOTAL"] = totalParts.ToString();
+    //            msg.BinaryData = buffer;
 
-                byte[] packet = msg.ToUdpBytes();
-                await udpClient.SendAsync(packet, packet.Length, GatewayIP, 5002);
-            }
-            Console.WriteLine("[SENSOR] Single photo transmission finished.");
-        } else {
-            Console.WriteLine("[ERROR] File frame.jpg not found for PHOTO action.");
-        }
-    }
+    //            byte[] packet = msg.ToUdpBytes();
+    //            await udpClient.SendAsync(packet, packet.Length, GatewayIP, 5002);
+    //        }
+    //        Console.WriteLine("[SENSOR] Single photo transmission finished.");
+    //    } else {
+    //        Console.WriteLine("[ERROR] File frame.jpg not found for PHOTO action.");
+    //    }
+    //}
 }

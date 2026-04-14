@@ -10,15 +10,19 @@ class Program {
     private static TcpClient _serverClient; // Added to maintain the connection to the Central Server
 
     private static UdpClient _udpListener;
-    private const int UdpPort = 5002;
 
-    private const int ServerUdpPort = 5003;
+    private static readonly int UdpPort = 5002;
+    private static readonly int ServerUdpPort = 5003;
+
     private static UdpClient _serverUdpClient = new UdpClient();
 
-    private const int Port = 5000;
-    private const string ServerIP = "127.0.0.1"; // Central Server IP
-    private const int ServerPort = 5001;         // Central Server Port
-    private const string GID = "G101";
+    private static readonly int Port = 5000;
+
+    private static readonly string ServerIP = Environment.GetEnvironmentVariable("SERVER_IP") ?? "127.0.0.1";
+
+    private static readonly int ServerPort = int.TryParse(Environment.GetEnvironmentVariable("SERVER_PORT"), out int sp) ? sp : 5001;
+
+    private static readonly string GID = Environment.GetEnvironmentVariable("GATEWAY_ID") ?? "G101";
 
     // Store for incomplete frames: Dictionary<SensorID, List<PartBytes>>
     private static ConcurrentDictionary<string, byte[][]> _videoBuffer = new();
@@ -41,6 +45,9 @@ class Program {
 
     // Buffer de Agregação (Batching): Guarda a (Hora exata, Valor)
     private static ConcurrentDictionary<(string, string), ConcurrentBag<(DateTime, double)>> _valuesToForward = new();
+
+    // Write to server Mutex
+    private static readonly SemaphoreSlim _serverTxLock = new SemaphoreSlim(1, 1);
 
     // Used to generate "Jitter" (Random delay)
     private static readonly Random _rnd = new Random();
@@ -164,7 +171,12 @@ class Program {
                     batchMsg.Data["RAW_PAYLOAD"] = JsonSerializer.Serialize(payloadList);
 
                     try {
-                        await Message.SendMessageAsync(_serverClient, batchMsg);
+                        await _serverTxLock.WaitAsync();
+                        try {
+                            await Message.SendMessageAsync(_serverClient, batchMsg);
+                        } finally {
+                            _serverTxLock.Release();
+                        }
                         Console.WriteLine($"[BATCHING] Packet of {snapshot.Count} readings of {sensorId} ({dataType}) sent.");
                     } catch {
                         // Rollback 
@@ -183,7 +195,11 @@ class Program {
         if (_serverClient != null && _serverClient.Connected) {
             try {
                 var byeMsg = new Message { CMD = "DISCONN", GID = GID, SID = "GATEWAY" };
-                await Message.SendMessageAsync(_serverClient, byeMsg);
+                try {
+                    await Message.SendMessageAsync(_serverClient, byeMsg);
+                } finally {
+                    _serverTxLock.Release();
+                }
                 Console.WriteLine("[SHUTDOWN] Server notified with success.");
 
                 await Task.Delay(500);
@@ -225,7 +241,13 @@ class Program {
                 // Let server know we are online
                 var sts = new Message { CMD = "STS", GID = GID };
                 sts.Data["STATUS"] = "ONLINE";
-                await Message.SendMessageAsync(_serverClient, sts);
+
+                await _serverTxLock.WaitAsync();
+                try {
+                    await Message.SendMessageAsync(_serverClient, sts);
+                } finally {
+                    _serverTxLock.Release();
+                }
 
                 await ListenToServerAsync(_serverClient);
             } catch {
@@ -268,8 +290,13 @@ class Program {
             if (_serverClient != null && _serverClient.Connected) {
                 try {
                     var hbMsg = new Message { CMD = "HB", GID = GID };
-                    await Message.SendMessageAsync(_serverClient, hbMsg);
-                } catch {           
+                    await _serverTxLock.WaitAsync();
+                    try {
+                        await Message.SendMessageAsync(_serverClient, hbMsg);
+                    } finally {
+                        _serverTxLock.Release();
+                    }
+                } catch {
                     // If send fails, the reconnection routine will recover the socket
                 }
             }
@@ -370,6 +397,18 @@ class Program {
                 response.Data["TYPE"] = "ERR";
                 response.Data["REASON"] = "MAINTENANCE";
                 Console.WriteLine($"[AUTH] Sensor {msg.SID} rejected (Under Maintenance)");
+
+                if (_serverClient != null && _serverClient.Connected) {
+                    var statusMsg = new Message { CMD = "STS", SID = msg.SID, GID = GID };
+                    statusMsg.Data["STATUS"] = "MAINTENANCE";
+
+                    await _serverTxLock.WaitAsync();
+                    try {
+                        await Message.SendMessageAsync(_serverClient, statusMsg);
+                    } finally {
+                        _serverTxLock.Release();
+                    }
+                }
             } else {
 
                 if (state == "offline" || state == "desativado") {
@@ -389,7 +428,14 @@ class Program {
                 if (_serverClient != null && _serverClient.Connected) {
                     var statusMsg = new Message { CMD = "STS", SID = msg.SID, GID = GID };
                     statusMsg.Data["STATUS"] = "ONLINE";
-                    await Message.SendMessageAsync(_serverClient, statusMsg);
+
+                    await _serverTxLock.WaitAsync();
+                    try {
+                        await Message.SendMessageAsync(_serverClient, statusMsg);
+                    } finally {
+                        _serverTxLock.Release();
+                    }
+
                     Console.WriteLine($"[FORWARD] Sensor {msg.SID} connected to gateway {msg.GID}.");
                 }
             }
@@ -420,7 +466,14 @@ class Program {
             // inform server that the sensor got disconnected
             if (_serverClient != null && _serverClient.Connected) {
                 var fwdMsg = new Message { CMD = "DISCONN", SID = msg.SID, GID = GID };
-                await Message.SendMessageAsync(_serverClient, fwdMsg);
+
+                await _serverTxLock.WaitAsync();
+                try {
+                    await Message.SendMessageAsync(_serverClient, fwdMsg);
+                } finally {
+                    _serverTxLock.Release();
+                }
+
                 Console.WriteLine($"[FORWARD] Disconnection warning from {msg.SID} to server");
             }
         }
@@ -498,7 +551,13 @@ class Program {
             if (_serverClient != null && _serverClient.Connected) {
                 var fwdStrm = new Message { CMD = "FWD_STRM", SID = msg.SID, GID = GID };
                 fwdStrm.Data["ACTION"] = "START";
-                _ = Message.SendMessageAsync(_serverClient, fwdStrm);
+
+                await _serverTxLock.WaitAsync();
+                try {
+                    await Message.SendMessageAsync(_serverClient, fwdStrm);
+                } finally {
+                    _serverTxLock.Release();
+                }
             }
 
         } else if (action == "STOP") {

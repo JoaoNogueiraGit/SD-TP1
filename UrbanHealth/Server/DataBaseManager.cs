@@ -5,26 +5,34 @@ using System.Text.Json;
 using System.Collections.Generic;
 using System;
 using System.Threading.Tasks;
+using System.Threading.Channels;
 
 namespace Server {
     public class DataBaseManager {
-        private readonly string _connectionString = "Data Source=onehealth_urbano.db";
+        private readonly string _connectionString;
 
-        private static readonly SemaphoreSlim _dbLock = new SemaphoreSlim(1, 1);
+        // Unbounded in-memory channel to receive messages instantly
+        private readonly Channel<Message> _messageChannel = Channel.CreateUnbounded<Message>();
 
         public DataBaseManager() {
+
+            string dbPath = Environment.GetEnvironmentVariable("DB_PATH") ?? "onehealth_urbano.db";
+            _connectionString = $"Data Source={dbPath}";
+
             InitializeDatabase();
+
+            // Start the background database worker
+            _ = Task.Run(ProcessDbQueueAsync);
         }
 
         private void InitializeDatabase() {
             using var connection = new SqliteConnection(_connectionString);
             connection.Open();
 
-            // Activate WAL mode (Allows Readings and Writes simultaneously)
+            // Activate WAL mode (Allows concurrent reads and writes)
             var pragmaCmd = connection.CreateCommand();
             pragmaCmd.CommandText = "PRAGMA journal_mode=WAL;";
             pragmaCmd.ExecuteNonQuery();
-
 
             var tableCmd = connection.CreateCommand();
             tableCmd.CommandText = @"
@@ -39,8 +47,7 @@ namespace Server {
                 );";
             tableCmd.ExecuteNonQuery();
 
-            // Create INDEXES 
-            // Fast search dictionaries, invisible in DB
+            // Create indexes for faster querying
             var indexCmd = connection.CreateCommand();
             indexCmd.CommandText = @"
                 CREATE INDEX IF NOT EXISTS idx_timestamp ON Readings(Timestamp DESC);
@@ -49,52 +56,80 @@ namespace Server {
             ";
             indexCmd.ExecuteNonQuery();
 
-            Console.WriteLine("[DB] Database SQLite initialized with Single Table, Indexes, and WAL mode.");
+            Console.WriteLine("[DB] Database SQLite initialized with Single Table, Indexes, WAL mode and Bulk-Insert Channel.");
         }
 
+        // Receives messages and writes them to the channel
         public async Task SaveReadingsAsync(Message msg) {
-            await _dbLock.WaitAsync();
+            // Non-blocking write to the channel
+            await _messageChannel.Writer.WriteAsync(msg);
+        }
 
-            try {
-                using var connection = new SqliteConnection(_connectionString);
-                await connection.OpenAsync();
+        // Reads from the channel and performs Bulk Inserts
+        private async Task ProcessDbQueueAsync() {
+            while (true) {
+                try {
+                    // Wait asynchronously until data is available to read
+                    await _messageChannel.Reader.WaitToReadAsync();
 
-                var insertCmd = connection.CreateCommand();
+                    using var connection = new SqliteConnection(_connectionString);
+                    await connection.OpenAsync();
 
-                insertCmd.CommandText = @"
-                    INSERT INTO Readings (Timestamp, GID, SID, Zone, Datatype, Value) 
-                    VALUES ($ts, $gid, $sid, $zone, $type, $val)";
+                    // Begin a database transaction for bulk insertion performance
+                    using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync();
 
-                insertCmd.Parameters.AddWithValue("$ts", msg.Timestamp);
-                insertCmd.Parameters.AddWithValue("$gid", msg.GID);
-                insertCmd.Parameters.AddWithValue("$sid", msg.SID);
-                insertCmd.Parameters.AddWithValue("$zone", msg.Data.GetValueOrDefault("ZONE", "UNKNOWN"));
-                insertCmd.Parameters.AddWithValue("$type", msg.Data.GetValueOrDefault("TYPE", "UNKNOWN"));
+                    var insertCmd = connection.CreateCommand();
+                    insertCmd.Transaction = transaction;
+                    insertCmd.CommandText = @"
+                        INSERT INTO Readings (Timestamp, GID, SID, Zone, Datatype, Value) 
+                        VALUES ($ts, $gid, $sid, $zone, $type, $val)";
 
-                double val = 0.0;
-                double.TryParse(msg.Data.GetValueOrDefault("VALUE", "0"), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out val);
-                insertCmd.Parameters.AddWithValue("$val", val);
+                    // Prepare parameters outside the loop to minimize memory allocation
+                    var pTs = insertCmd.Parameters.Add("$ts", SqliteType.Text);
+                    var pGid = insertCmd.Parameters.Add("$gid", SqliteType.Text);
+                    var pSid = insertCmd.Parameters.Add("$sid", SqliteType.Text);
+                    var pZone = insertCmd.Parameters.Add("$zone", SqliteType.Text);
+                    var pType = insertCmd.Parameters.Add("$type", SqliteType.Text);
+                    var pVal = insertCmd.Parameters.Add("$val", SqliteType.Real);
 
-                await insertCmd.ExecuteNonQueryAsync();
-                // Console.WriteLine($"[DB] Reading from {msg.SID} stored in DB.");
-            } catch (Exception ex) {
-                Console.WriteLine($"[DB ERROR] Reading not stored: {ex.Message}");
-            } finally {
-                _dbLock.Release();
+                    int count = 0;
+
+                    // Read messages from the channel until empty or until reaching the batch limit (1000)
+                    while (count < 1000 && _messageChannel.Reader.TryRead(out var msg)) {
+                        pTs.Value = msg.Timestamp;
+                        pGid.Value = msg.GID;
+                        pSid.Value = msg.SID;
+                        pZone.Value = msg.Data.GetValueOrDefault("ZONE", "UNKNOWN");
+                        pType.Value = msg.Data.GetValueOrDefault("TYPE", "UNKNOWN");
+
+                        double val = 0.0;
+                        double.TryParse(msg.Data.GetValueOrDefault("VALUE", "0"), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out val);
+                        pVal.Value = val;
+
+                        await insertCmd.ExecuteNonQueryAsync();
+                        count++;
+                    }
+
+                    // Commit the transaction to save all batched messages to disk
+                    await transaction.CommitAsync();
+
+                } catch (Exception ex) {
+                    Console.WriteLine($"[DB FATAL ERROR] Bulk insert failed: {ex.Message}");
+                    // Delay on disk failure to prevent console spamming
+                    await Task.Delay(2000);
+                }
             }
         }
 
+        // Lock-free database reading
         public async Task<string> GetRecentReadingsJsonAsync(int limit = 50) {
             var readings = new List<Dictionary<string, string>>();
 
-            // Nota: Não bloqueamos com _dbLock aqui! O WAL mode permite ler sem bloquear as escritas.
-            // Dont use _dbLock, WAL allows read without blocking writes
             try {
                 using var connection = new SqliteConnection(_connectionString);
                 await connection.OpenAsync();
 
                 var selectCmd = connection.CreateCommand();
-                
                 selectCmd.CommandText = @"
                     SELECT Timestamp, SID, Zone, Datatype, Value, GID 
                     FROM Readings 
