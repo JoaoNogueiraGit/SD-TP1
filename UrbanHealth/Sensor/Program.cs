@@ -47,6 +47,8 @@ class Program {
         _ = Task.Run(ConnectToGatewayLoopAsync);
         _ = Task.Run(VideoStreamRoutineAsync);
 
+        _ = Task.Run(DataGenerationRoutineAsync);
+
 
 
         while (true) {

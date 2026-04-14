@@ -509,7 +509,7 @@
                     '<td>' + r.Zone + '</td>' +
                     '<td><span class="badge">' + r.Type + '</span></td>' +
                     '<td class="' + cls + '">' + r.Value + suffix + '</td>' +
-                    '<td><button class="btn-detail" onclick="openModal(\'' + r.Sensor + '\')">Details</button></td>';
+                    '<td><button class="btn-detail" onclick="openModal(\'' + r.Sensor + '\', \'' + r.Type + '\')">Details</button></td>';
                 tbody.appendChild(tr);
             });
             document.getElementById('alert-count').innerText = alertCount;
@@ -518,16 +518,24 @@
         /* ────────────────────────────────────────────────────────
            MODAL
         ──────────────────────────────────────────────────────── */
-        function openModal(sensorId) {
+        function openModal(sensorId, targetType) {
             document.getElementById('sensor-modal').style.display = 'flex';
-            document.getElementById('modal-title').innerText = 'Analytical History: ' + sensorId;
+            document.getElementById('modal-title').innerText = 'Analytical History: ' + sensorId + ' - ' + targetType;
 
-            var sensorData = globalData.readings.filter(function (r) { return r.Sensor === sensorId; }).reverse();
+            var sensorData = globalData.readings.filter(function (r) {
+                return r.Sensor === sensorId && r.Type === targetType;
+            }).reverse();
+
             if (sensorData.length > 0) {
                 var last = sensorData[sensorData.length - 1];
                 document.getElementById('modal-zone').innerText = 'Zone: ' + last.Zone;
                 document.getElementById('modal-gw').innerText = 'Gateway: ' + last.Gateway;
                 document.getElementById('modal-latest').innerText = 'Last: ' + last.Value + ' (' + last.Type + ')';
+            } else {
+                // Visual cleaning in case there is no data
+                document.getElementById('modal-zone').innerText = 'Zone: --';
+                document.getElementById('modal-gw').innerText = 'Gateway: --';
+                document.getElementById('modal-latest').innerText = 'Last: --';
             }
 
             var labels = sensorData.map(function (r) { return (r.Time.split('T')[1] || r.Time); });
