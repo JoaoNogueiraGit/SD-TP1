@@ -123,7 +123,7 @@ namespace Server {
             return JsonSerializer.Serialize(readings);
         }
 
-        public async Task<string> GetStatisticsJsonAsync(string zone = null, string dataType = null) {
+        public async Task<string> GetStatisticsJsonAsync(string zone = null, string dataType = null, string sensor = null) {
             var stats = new Dictionary<string, object>();
             var readings = new List<double>();
             var timestamps = new List<string>();
@@ -142,6 +142,11 @@ namespace Server {
                     if (whereClause.Length > 0) whereClause += " AND";
                     else whereClause += " WHERE";
                     whereClause += $" Datatype = '{dataType.Replace("'", "''")}'";
+                }
+                if (!string.IsNullOrEmpty(sensor) && sensor != "ALL") {
+                    if (whereClause.Length > 0) whereClause += " AND";
+                    else whereClause += " WHERE";
+                    whereClause += $" SID = '{sensor.Replace("'", "''")}'";
                 }
 
                 selectCmd.CommandText = @$"
@@ -228,6 +233,49 @@ namespace Server {
             }
 
             return JsonSerializer.Serialize(types.OrderBy(t => t).ToList());
+        }
+
+        public async Task<string> GetAvailableSensorsJsonAsync(string zone = null, string dataType = null)
+        {
+            var sensors = new HashSet<string>();
+
+            try
+            {
+                using var connection = new SqliteConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var selectCmd = connection.CreateCommand();
+
+                string whereClause = "";
+                if (!string.IsNullOrEmpty(zone) && zone != "ALL")
+                {
+                    whereClause += $" WHERE Zone = '{zone.Replace("'", "''")}'";
+                }
+                if (!string.IsNullOrEmpty(dataType) && dataType != "ALL")
+                {
+                    if (whereClause.Length > 0) whereClause += " AND";
+                    else whereClause += " WHERE";
+                    whereClause += $" Datatype = '{dataType.Replace("'", "''")}'";
+                }
+
+                selectCmd.CommandText = $@"
+                    SELECT DISTINCT SID 
+                    FROM Readings 
+                    {whereClause}
+                    ORDER BY SID";
+
+                using var reader = await selectCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    sensors.Add(reader.GetString(0));
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DB ERROR] Failed to get sensors: {ex.Message}");
+            }
+
+            return JsonSerializer.Serialize(sensors.OrderBy(s => s).ToList());
         }
 
         private double GetMedian(List<double> values) {

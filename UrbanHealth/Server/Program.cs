@@ -264,7 +264,7 @@ class Program {
                         res.AppendHeader("Access-Control-Allow-Origin", "*");
                         await res.OutputStream.WriteAsync(jsonBytes, 0, jsonBytes.Length);
                     }
-                    else if (req.Url.AbsolutePath.StartsWith("/api/stats")) {
+                    else if (req.Url.AbsolutePath.StartsWith("/api/sensors")) {
                         // Parse query string manually
                         string queryString = req.Url.Query.TrimStart('?');
                         string zone = null;
@@ -280,7 +280,33 @@ class Program {
                             }
                         }
 
-                        string jsonStats = await _dbManager.GetStatisticsJsonAsync(zone, dataType);
+                        string jsonSensors = await _dbManager.GetAvailableSensorsJsonAsync(zone, dataType);
+
+                        byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(jsonSensors);
+                        res.ContentType = "application/json";
+                        res.ContentLength64 = jsonBytes.Length;
+                        res.AppendHeader("Access-Control-Allow-Origin", "*");
+                        await res.OutputStream.WriteAsync(jsonBytes, 0, jsonBytes.Length);
+                    }
+                    else if (req.Url.AbsolutePath.StartsWith("/api/stats")) {
+                        // Parse query string manually
+                        string queryString = req.Url.Query.TrimStart('?');
+                        string zone = null;
+                        string dataType = null;
+                        string sensor = null;
+
+                        foreach (var param in queryString.Split('&')) {
+                            var parts = param.Split('=');
+                            if (parts.Length == 2) {
+                                string key = Uri.UnescapeDataString(parts[0]);
+                                string value = Uri.UnescapeDataString(parts[1]);
+                                if (key == "zone") zone = value;
+                                else if (key == "type") dataType = value;
+                                else if (key == "sensor") sensor = value;
+                            }
+                        }
+
+                        string jsonStats = await _dbManager.GetStatisticsJsonAsync(zone, dataType, sensor);
 
                         byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(jsonStats);
                         res.ContentType = "application/json";

@@ -452,17 +452,23 @@
         </section>
 
         <section id="analytics" class="tab-pane">
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 25px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 15px; margin-bottom: 25px;">
                 <div>
                     <label style="color:var(--text-muted);font-weight:bold;">Zone</label>
-                    <select id="analytics-zone" style="width:100%;padding:10px;background:var(--bg-hover);color:white;border:1px solid var(--bg-hover);border-radius:5px;margin-top:5px;">
+                    <select id="analytics-zone" onchange="updateAnalyticsSensors()" style="width:100%;padding:10px;background:var(--bg-hover);color:white;border:1px solid var(--bg-hover);border-radius:5px;margin-top:5px;">
                         <option value="ALL">All Zones</option>
                     </select>
                 </div>
                 <div>
                     <label style="color:var(--text-muted);font-weight:bold;">Data Type</label>
-                    <select id="analytics-type" style="width:100%;padding:10px;background:var(--bg-hover);color:white;border:1px solid var(--bg-hover);border-radius:5px;margin-top:5px;">
+                    <select id="analytics-type" onchange="updateAnalyticsSensors()" style="width:100%;padding:10px;background:var(--bg-hover);color:white;border:1px solid var(--bg-hover);border-radius:5px;margin-top:5px;">
                         <option value="ALL">All Types</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="color:var(--text-muted);font-weight:bold;">Sensor (Optional)</label>
+                    <select id="analytics-sensor" style="width:100%;padding:10px;background:var(--bg-hover);color:white;border:1px solid var(--bg-hover);border-radius:5px;margin-top:5px;">
+                        <option value="ALL">All Sensors</option>
                     </select>
                 </div>
                 <div style="display:flex;align-items:flex-end;">
@@ -1026,12 +1032,42 @@
             }
         }
 
-        async function loadAnalytics() {
+        async function updateAnalyticsSensors() {
             var zone = document.getElementById('analytics-zone').value;
             var dataType = document.getElementById('analytics-type').value;
 
             try {
+                var queryUrl = '/api/sensors?zone=' + encodeURIComponent(zone) + '&type=' + encodeURIComponent(dataType);
+                var res = await fetch(queryUrl);
+                var sensors = await res.json();
+
+                var sensorSelect = document.getElementById('analytics-sensor');
+                // Limpar opções anteriores exceto a primeira
+                while (sensorSelect.options.length > 1) {
+                    sensorSelect.remove(1);
+                }
+
+                sensors.forEach(function (sensor) {
+                    var opt = document.createElement('option');
+                    opt.value = sensor;
+                    opt.innerText = sensor;
+                    sensorSelect.appendChild(opt);
+                });
+            } catch (e) {
+                console.error('Failed to load sensors:', e);
+            }
+        }
+
+        async function loadAnalytics() {
+            var zone = document.getElementById('analytics-zone').value;
+            var dataType = document.getElementById('analytics-type').value;
+            var sensor = document.getElementById('analytics-sensor').value;
+
+            try {
                 var queryUrl = '/api/stats?zone=' + encodeURIComponent(zone) + '&type=' + encodeURIComponent(dataType);
+                if (sensor && sensor !== 'ALL') {
+                    queryUrl += '&sensor=' + encodeURIComponent(sensor);
+                }
                 var res = await fetch(queryUrl);
                 var stats = await res.json();
 
