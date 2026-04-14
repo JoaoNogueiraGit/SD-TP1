@@ -393,6 +393,7 @@
             <li class="nav-item active" onclick="switchTab('overview',this)">Monitoring</li>
             <li class="nav-item" onclick="switchTab('topology',this)">Topology</li>
             <li class="nav-item" onclick="switchTab('cameras',this)">Sensors Streaming</li>
+            <li class="nav-item" onclick="switchTab('analytics',this)">Analytics</li>
         </ul>
     </nav>
 
@@ -448,6 +449,37 @@
                 <button class="add-cam" onclick="addCamera()">+ Watch Transmission</button>
             </div>
             <div class="video-grid" id="video-wall"></div>
+        </section>
+
+        <section id="analytics" class="tab-pane">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 25px;">
+                <div>
+                    <label style="color:var(--text-muted);font-weight:bold;">Zone</label>
+                    <select id="analytics-zone" style="width:100%;padding:10px;background:var(--bg-hover);color:white;border:1px solid var(--bg-hover);border-radius:5px;margin-top:5px;">
+                        <option value="ALL">All Zones</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="color:var(--text-muted);font-weight:bold;">Data Type</label>
+                    <select id="analytics-type" style="width:100%;padding:10px;background:var(--bg-hover);color:white;border:1px solid var(--bg-hover);border-radius:5px;margin-top:5px;">
+                        <option value="ALL">All Types</option>
+                    </select>
+                </div>
+                <div style="display:flex;align-items:flex-end;">
+                    <button onclick="loadAnalytics()" style="width:100%;padding:10px;background:var(--accent-primary);color:var(--bg-dark);font-weight:bold;border:none;border-radius:5px;cursor:pointer;">Calculate Statistics</button>
+                </div>
+            </div>
+
+            <div id="analytics-results" style="display:none;">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:15px;margin-bottom:25px;">
+                    <div class="card"><h4>Average</h4><p id="stat-mean" style="font-size:24px;color:var(--accent-primary);">--</p></div>
+                    <div class="card"><h4>Median</h4><p id="stat-median" style="font-size:24px;color:var(--accent-primary);">--</p></div>
+                    <div class="card"><h4>Std Dev</h4><p id="stat-stddev" style="font-size:24px;color:var(--accent-primary);">--</p></div>
+                    <div class="card"><h4>Minimum</h4><p id="stat-min" style="font-size:24px;color:var(--danger);">--</p></div>
+                    <div class="card"><h4>Maximum</h4><p id="stat-max" style="font-size:24px;color:var(--success);">--</p></div>
+                    <div class="card"><h4>Total Readings</h4><p id="stat-count" style="font-size:24px;color:var(--accent-primary);">--</p></div>
+                </div>
+            </div>
         </section>
     </main>
 
@@ -964,8 +996,68 @@
         })();
 
         /* ────────────────────────────────────────────────────────
+           ANALYTICS
+        ──────────────────────────────────────────────────────── */
+        var analyticsChartInstance = null;
+
+        async function initializeAnalyticsSelectors() {
+            try {
+                var zonesRes = await fetch('/api/zones');
+                var zones = await zonesRes.json();
+                var zoneSelect = document.getElementById('analytics-zone');
+                zones.forEach(function (zone) {
+                    var opt = document.createElement('option');
+                    opt.value = zone;
+                    opt.innerText = zone;
+                    zoneSelect.appendChild(opt);
+                });
+
+                var typesRes = await fetch('/api/types');
+                var types = await typesRes.json();
+                var typeSelect = document.getElementById('analytics-type');
+                types.forEach(function (type) {
+                    var opt = document.createElement('option');
+                    opt.value = type;
+                    opt.innerText = type;
+                    typeSelect.appendChild(opt);
+                });
+            } catch (e) {
+                console.error('Failed to load analytics options:', e);
+            }
+        }
+
+        async function loadAnalytics() {
+            var zone = document.getElementById('analytics-zone').value;
+            var dataType = document.getElementById('analytics-type').value;
+
+            try {
+                var queryUrl = '/api/stats?zone=' + encodeURIComponent(zone) + '&type=' + encodeURIComponent(dataType);
+                var res = await fetch(queryUrl);
+                var stats = await res.json();
+
+                if (stats.error) {
+                    alert('Error: ' + stats.error);
+                    return;
+                }
+
+                document.getElementById('analytics-results').style.display = 'block';
+                document.getElementById('stat-mean').innerText = stats.mean;
+                document.getElementById('stat-median').innerText = stats.median;
+                document.getElementById('stat-stddev').innerText = stats.stdDev;
+                document.getElementById('stat-min').innerText = stats.min;
+                document.getElementById('stat-max').innerText = stats.max;
+                document.getElementById('stat-count').innerText = stats.count;
+
+            } catch (e) {
+                console.error('Failed to load analytics:', e);
+                alert('Error loading analytics data');
+            }
+        }
+
+        /* ────────────────────────────────────────────────────────
            BOOT
         ──────────────────────────────────────────────────────── */
+        initializeAnalyticsSelectors();
         fetchData();
         setInterval(fetchData, 3000);
     </script>
