@@ -562,7 +562,7 @@
                 else if (r.Type === 'HUM') { suffix = ' %'; if (parseFloat(r.Value) > 70) { cls = 'val-high'; alertCount++; } }
                 else if (r.Type === 'CO2') { suffix = ' ppm'; if (val > 800) { cls = 'val-high'; alertCount++; } }
                 else if (r.Type === 'NOISE') { suffix = ' dB'; if (val > 75) { cls = 'val-high'; alertCount++; } }
-                else if (r.Type === 'PM2') { suffix = ' µg/m³'; if (val > 35) { cls = 'val-high'; alertCount++; } }
+                else if (r.Type === 'PM2') { suffix = ' ug/m³'; if (val > 35) { cls = 'val-high'; alertCount++; } }
                 else if (r.Type === 'UV') { suffix = ' UV'; if (val > 7) { cls = 'val-high'; alertCount++; } }
 
                 // --- FORMATA A DATA PARA A TABELA ---

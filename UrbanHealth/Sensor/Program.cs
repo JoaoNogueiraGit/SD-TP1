@@ -265,7 +265,7 @@ class Program {
                         case "HUM":   // Humidity (40 to 80 %)
                             value = 40.0 + (rnd.NextDouble() * 40.0);
                             break;
-                        case "PM2":   // Quality of air - particles (5 to 50 µg/m³)
+                        case "PM2":   // Quality of air - particles (5 to 50 ug/m³)
                             value = 5.0 + (rnd.NextDouble() * 45.0);
                             break;
                         case "CO2":   // Carbon Dioxide (400 to 1000 ppm)
