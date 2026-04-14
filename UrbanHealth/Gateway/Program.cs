@@ -18,7 +18,7 @@ class Program {
 
     private static readonly int Port = 5000;
 
-    private static readonly string ServerIP = Environment.GetEnvironmentVariable("SERVER_IP") ?? "127.0.0.1";
+    private static readonly string ServerIP = Environment.GetEnvironmentVariable("SERVER_IP") ?? "16.171.143.55";
 
     private static readonly int ServerPort = int.TryParse(Environment.GetEnvironmentVariable("SERVER_PORT"), out int sp) ? sp : 5001;
 

@@ -491,13 +491,33 @@
 
     <script>
         /* ────────────────────────────────────────────────────────
-           GLOBAL STATE
+            GLOBAL STATE
         ──────────────────────────────────────────────────────── */
         var globalData = { gatewaysOnline: [], activeSensors: [], readings: [] };
         var sensorChartInstance = null;
 
+        /* ─── FORMAT DATE HELPER ─── */
+        // Formata a data ISO 8601 (longa) para DD/MM HH:mm:ss limpo
+        function formatarData(isoString) {
+            try {
+                const data = new Date(isoString);
+
+                // Extrai os valores e garante que têm 2 dígitos (ex: "09" em vez de "9")
+                const dia = String(data.getDate()).padStart(2, '0');
+                const mes = String(data.getMonth() + 1).padStart(2, '0'); // Os meses começam no 0 em JS
+                const hora = String(data.getHours()).padStart(2, '0');
+                const min = String(data.getMinutes()).padStart(2, '0');
+                const seg = String(data.getSeconds()).padStart(2, '0');
+
+                // Retorna no formato: 14/04 17:05:58
+                return `${dia}/${mes} ${hora}:${min}:${seg}`;
+            } catch (e) {
+                return isoString; // Fallback se a data for inválida
+            }
+        }
+
         /* ────────────────────────────────────────────────────────
-           NAVIGATION
+            NAVIGATION
         ──────────────────────────────────────────────────────── */
         function switchTab(tabId, el) {
             document.querySelectorAll('.tab-pane').forEach(function (t) { t.classList.remove('active'); });
@@ -509,7 +529,7 @@
         }
 
         /* ────────────────────────────────────────────────────────
-           DATA FETCH
+            DATA FETCH
         ──────────────────────────────────────────────────────── */
         async function fetchData() {
             try {
@@ -523,7 +543,7 @@
         }
 
         /* ────────────────────────────────────────────────────────
-           DASHBOARD
+            DASHBOARD
         ──────────────────────────────────────────────────────── */
         function updateDashboard() {
             document.getElementById('last-update').innerText = new Date().toLocaleTimeString();
@@ -540,9 +560,13 @@
                 var cls = 'val-normal', suffix = '';
                 if (r.Type === 'TEMP') { suffix = ' \u00B0C'; if (parseFloat(r.Value) > 28) { cls = 'val-high'; alertCount++; } }
                 if (r.Type === 'HUM') { suffix = ' %'; if (parseFloat(r.Value) > 70) { cls = 'val-high'; alertCount++; } }
+
+                // --- FORMATA A DATA PARA A TABELA ---
+                const horaLimpa = formatarData(r.Time);
+
                 var tr = document.createElement('tr');
                 tr.innerHTML =
-                    '<td style="color:var(--text-muted);">' + r.Time + '</td>' +
+                    '<td style="color:var(--text-muted);">' + horaLimpa + '</td>' +
                     '<td><strong>' + r.Sensor + '</strong></td>' +
                     '<td>' + r.Zone + '</td>' +
                     '<td><span class="badge">' + r.Type + '</span></td>' +
@@ -554,7 +578,7 @@
         }
 
         /* ────────────────────────────────────────────────────────
-           MODAL
+            MODAL
         ──────────────────────────────────────────────────────── */
         function openModal(sensorId, targetType) {
             document.getElementById('sensor-modal').style.display = 'flex';
@@ -570,13 +594,13 @@
                 document.getElementById('modal-gw').innerText = 'Gateway: ' + last.Gateway;
                 document.getElementById('modal-latest').innerText = 'Last: ' + last.Value + ' (' + last.Type + ')';
             } else {
-                // Visual cleaning in case there is no data
                 document.getElementById('modal-zone').innerText = 'Zone: --';
                 document.getElementById('modal-gw').innerText = 'Gateway: --';
                 document.getElementById('modal-latest').innerText = 'Last: --';
             }
 
-            var labels = sensorData.map(function (r) { return (r.Time.split('T')[1] || r.Time); });
+            // --- FORMATA A DATA PARA OS GRÁFICOS ---
+            var labels = sensorData.map(function (r) { return formatarData(r.Time); });
             var values = sensorData.map(function (r) { return parseFloat(r.Value); });
             var dataType = sensorData.length > 0 ? sensorData[0].Type : 'Value';
 
@@ -601,7 +625,8 @@
                     responsive: true, maintainAspectRatio: false,
                     scales: {
                         y: { beginAtZero: false, grid: { color: '#262a40' }, ticks: { color: '#8a91b8' } },
-                        x: { grid: { display: false }, ticks: { color: '#8a91b8' } }
+                        // Configurações extra para não encavalar o texto:
+                        x: { grid: { display: false }, ticks: { color: '#8a91b8', maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } }
                     },
                     plugins: { legend: { labels: { color: '#ffffff' } } }
                 }
@@ -610,7 +635,7 @@
         function closeModal() { document.getElementById('sensor-modal').style.display = 'none'; }
 
         /* ────────────────────────────────────────────────────────
-           VIDEO WALL
+            VIDEO WALL
         ──────────────────────────────────────────────────────── */
         var cameraIntervals = {};
         function addCamera() {
@@ -639,7 +664,7 @@
         }
 
         /* ════════════════════════════════════════════════════════
-           TOPOLOGY — HIERARCHICAL TREE (STATIC LAYOUT)
+            TOPOLOGY — HIERARCHICAL TREE (STATIC LAYOUT)
         ════════════════════════════════════════════════════════ */
         (function () {
             var COL = {
@@ -658,35 +683,26 @@
             var _raf = null;
             var _tick = 0;
 
-            /* ── node factory ── */
             function mkNode(id, type, label) {
                 return {
                     id: id, type: type, label: label,
-                    x: 0, y: 0,       // Current position
-                    tx: 0, ty: 0,     // Target position (for smooth layout transition)
-                    alert: false
+                    x: 0, y: 0, tx: 0, ty: 0, alert: false
                 };
             }
 
-            /* ── public: sync from globalData ── */
             window.topoSyncGraph = function () {
                 var gws = globalData.gatewaysOnline || [];
                 var sensors = globalData.activeSensors || [];
                 var reads = globalData.readings || [];
 
-                /* alerts */
                 var alertSet = {};
                 reads.forEach(function (r) {
                     if (r.Type === 'TEMP' && parseFloat(r.Value) > 28) alertSet[r.Sensor] = true;
                     if (r.Type === 'HUM' && parseFloat(r.Value) > 70) alertSet[r.Sensor] = true;
                 });
 
-                /* server */
-                if (!_nodes['SERVER']) {
-                    _nodes['SERVER'] = mkNode('SERVER', 'SERVER', 'Server');
-                }
+                if (!_nodes['SERVER']) _nodes['SERVER'] = mkNode('SERVER', 'SERVER', 'Server');
 
-                /* gateways */
                 var liveGw = {};
                 gws.forEach(function (gw) {
                     liveGw[gw] = true;
@@ -695,16 +711,13 @@
                     if (!_edges[eid]) _edges[eid] = { id: eid, from: gw, to: 'SERVER', type: 'SG' };
                 });
 
-                /* sensors */
                 var liveSn = {};
                 sensors.forEach(function (s) {
                     liveSn[s.Sensor] = true;
                     if (!_nodes[s.Sensor]) _nodes[s.Sensor] = mkNode(s.Sensor, 'SENSOR', s.Sensor);
                     _nodes[s.Sensor].alert = !!alertSet[s.Sensor];
                     var eid = 'e_' + s.Sensor + '_' + s.Gateway;
-
                     if (!_edges[eid]) {
-                        // Limpar arestas antigas deste sensor (se ele mudou de Gateway)
                         Object.keys(_edges).forEach(function (k) {
                             if ((_edges[k].from === s.Sensor) && k !== eid) delete _edges[k];
                         });
@@ -712,7 +725,6 @@
                     }
                 });
 
-                /* Clean disconnected devices */
                 Object.keys(_nodes).forEach(function (id) {
                     var n = _nodes[id];
                     if ((n.type === 'GATEWAY' && !liveGw[id]) || (n.type === 'SENSOR' && !liveSn[id])) {
@@ -722,56 +734,36 @@
                         });
                     }
                 });
-
                 calculateHierarchicalLayout();
-
                 if (!_raf) _loop();
             };
 
-            /* ── Tree Layout Algorithm ── */
             function calculateHierarchicalLayout() {
                 var srv = _nodes['SERVER'];
                 if (srv) { srv.tx = 0; srv.ty = -180; }
-
                 var gwNodes = Object.values(_nodes).filter(function (n) { return n.type === 'GATEWAY'; });
                 var snNodes = Object.values(_nodes).filter(function (n) { return n.type === 'SENSOR'; });
-
                 var currentX = 0;
                 var sensorSpacing = 90;
                 var gatewayGap = 100;
-
                 gwNodes.forEach(function (gw) {
-                    // Find sensors connected to this gateway
-                    var gwSensors = snNodes.filter(function (s) {
-                        return !!_edges['e_' + s.id + '_' + gw.id];
-                    });
-
-                    // Space needed for this Gateway's branch
+                    var gwSensors = snNodes.filter(function (s) { return !!_edges['e_' + s.id + '_' + gw.id]; });
                     var branchWidth = Math.max(120, gwSensors.length * sensorSpacing);
                     var startX = currentX;
-
-                    // Distribute Sensors evenly below the Gateway
                     gwSensors.forEach(function (s, i) {
                         s.tx = startX + (branchWidth / gwSensors.length) * (i + 0.5);
                         s.ty = 160;
                     });
-
-                    // Center the Gateway above its Sensors
                     gw.tx = startX + branchWidth / 2;
                     gw.ty = 0;
-
                     currentX += branchWidth + gatewayGap;
                 });
-
-                // Center the entire tree around X = 0
                 var totalW = currentX > 0 ? currentX - gatewayGap : 0;
                 var shiftX = -totalW / 2;
-
                 gwNodes.forEach(function (gw) { gw.tx += shiftX; });
                 snNodes.forEach(function (s) { s.tx += shiftX; });
             }
 
-            /* ── Animate Layout (Smooth Glide) ── */
             function animateNodes() {
                 Object.values(_nodes).forEach(function (n) {
                     n.x += (n.tx - n.x) * 0.1;
@@ -779,138 +771,91 @@
                 });
             }
 
-            /* ── helpers ── */
             function rrect(x, y, w, h, r) {
-                _ctx.beginPath();
-                _ctx.moveTo(x + r, y);
+                _ctx.beginPath(); _ctx.moveTo(x + r, y);
                 _ctx.lineTo(x + w - r, y); _ctx.arcTo(x + w, y, x + w, y + r, r);
                 _ctx.lineTo(x + w, y + h - r); _ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
                 _ctx.lineTo(x + r, y + h); _ctx.arcTo(x, y + h, x, y + h - r, r);
-                _ctx.lineTo(x, y + r); _ctx.arcTo(x, y, x + r, y, r);
-                _ctx.closePath();
+                _ctx.lineTo(x, y + r); _ctx.arcTo(x, y, x + r, y, r); _ctx.closePath();
             }
 
             function drawEdge(ax, ay, bx, by, col) {
                 var grad = _ctx.createLinearGradient(ax, ay, bx, by);
                 grad.addColorStop(0, col.replace('0.40', '0.7').replace('0.35', '0.7'));
                 grad.addColorStop(1, col.replace('0.40', '0.1').replace('0.35', '0.1'));
-                _ctx.save();
-                _ctx.strokeStyle = grad;
-                _ctx.lineWidth = 1.5;
-                _ctx.setLineDash([6, 5]);
-                _ctx.beginPath(); _ctx.moveTo(ax, ay); _ctx.lineTo(bx, by); _ctx.stroke();
+                _ctx.save(); _ctx.strokeStyle = grad; _ctx.lineWidth = 1.5;
+                _ctx.setLineDash([6, 5]); _ctx.beginPath(); _ctx.moveTo(ax, ay); _ctx.lineTo(bx, by); _ctx.stroke();
                 _ctx.setLineDash([]);
-
-                /* arrow toward b */
                 var ang = Math.atan2(by - ay, bx - ax);
                 var t = 9;
                 _ctx.fillStyle = col.replace('0.40', '0.75').replace('0.35', '0.7');
-                _ctx.beginPath();
-                _ctx.moveTo(bx - t * Math.cos(ang), by - t * Math.sin(ang));
+                _ctx.beginPath(); _ctx.moveTo(bx - t * Math.cos(ang), by - t * Math.sin(ang));
                 _ctx.lineTo(bx - t * Math.cos(ang - 0.5), by - t * Math.sin(ang - 0.5));
                 _ctx.lineTo(bx - t * Math.cos(ang + 0.5), by - t * Math.sin(ang + 0.5));
-                _ctx.closePath(); _ctx.fill();
-                _ctx.restore();
+                _ctx.closePath(); _ctx.fill(); _ctx.restore();
             }
 
             function drawServer(sx, sy, r, col) {
                 _ctx.save();
                 var g = _ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 2.2);
-                g.addColorStop(0, 'rgba(0,172,193,0.16)');
-                g.addColorStop(1, 'transparent');
-                _ctx.fillStyle = g;
-                _ctx.beginPath(); _ctx.arc(sx, sy, r * 2.2, 0, Math.PI * 2); _ctx.fill();
-
+                g.addColorStop(0, 'rgba(0,172,193,0.16)'); g.addColorStop(1, 'transparent');
+                _ctx.fillStyle = g; _ctx.beginPath(); _ctx.arc(sx, sy, r * 2.2, 0, Math.PI * 2); _ctx.fill();
                 var w = r * 1.5, h = r * 2;
-                _ctx.fillStyle = '#101424';
-                _ctx.strokeStyle = col;
-                _ctx.lineWidth = 2.5;
-                rrect(sx - w / 2, sy - h / 2, w, h, 4);
-                _ctx.fill(); _ctx.stroke();
-
+                _ctx.fillStyle = '#101424'; _ctx.strokeStyle = col; _ctx.lineWidth = 2.5;
+                rrect(sx - w / 2, sy - h / 2, w, h, 4); _ctx.fill(); _ctx.stroke();
                 for (var i = 0; i < 3; i++) {
                     var slotY = sy - h / 2 + 6 + i * (h / 3 - 1);
-                    _ctx.fillStyle = '#1a1e35';
-                    _ctx.strokeStyle = '#2d3258';
-                    _ctx.lineWidth = 1;
-                    rrect(sx - w / 2 + 4, slotY, w - 8, h / 3 - 5, 2);
-                    _ctx.fill(); _ctx.stroke();
+                    _ctx.fillStyle = '#1a1e35'; _ctx.strokeStyle = '#2d3258'; _ctx.lineWidth = 1;
+                    rrect(sx - w / 2 + 4, slotY, w - 8, h / 3 - 5, 2); _ctx.fill(); _ctx.stroke();
                     _ctx.fillStyle = i === 0 ? COL.sensorOk : (i === 1 ? '#00acc1' : '#8a91b8');
                     _ctx.beginPath(); _ctx.arc(sx - w / 2 + 10, slotY + (h / 3 - 5) / 2, 2.5, 0, Math.PI * 2); _ctx.fill();
                 }
-
-                _ctx.fillStyle = '#fff';
-                _ctx.font = 'bold ' + Math.max(10, Math.round(11 * _zoom)) + 'px "Segoe UI",sans-serif';
-                _ctx.textAlign = 'center'; _ctx.textBaseline = 'top';
-                _ctx.fillText('Server', sx, sy + h / 2 + 6);
-                _ctx.restore();
+                _ctx.fillStyle = '#fff'; _ctx.font = 'bold ' + Math.max(10, Math.round(11 * _zoom)) + 'px "Segoe UI",sans-serif';
+                _ctx.textAlign = 'center'; _ctx.textBaseline = 'top'; _ctx.fillText('Server', sx, sy + h / 2 + 6); _ctx.restore();
             }
 
             function drawGateway(sx, sy, r, col, label) {
                 var w = r * 2.4, h = r * 1.2;
-                _ctx.save();
-                _ctx.fillStyle = '#101424';
-                _ctx.strokeStyle = col;
-                _ctx.lineWidth = 2;
-                rrect(sx - w / 2, sy - h / 2, w, h, 4);
-                _ctx.fill(); _ctx.stroke();
-
+                _ctx.save(); _ctx.fillStyle = '#101424'; _ctx.strokeStyle = col; _ctx.lineWidth = 2;
+                rrect(sx - w / 2, sy - h / 2, w, h, 4); _ctx.fill(); _ctx.stroke();
                 _ctx.strokeStyle = col; _ctx.lineWidth = 1.5;
                 [sx - w * 0.3, sx + w * 0.3].forEach(function (ax, i) {
                     var tip = sy - h / 2 - r * 0.85 * (i === 0 ? 1 : 1);
                     _ctx.beginPath(); _ctx.moveTo(ax, sy - h / 2); _ctx.lineTo(ax + (i === 0 ? -5 : 5), tip); _ctx.stroke();
-                    _ctx.fillStyle = col;
-                    _ctx.beginPath(); _ctx.arc(ax + (i === 0 ? -5 : 5), tip, 3, 0, Math.PI * 2); _ctx.fill();
+                    _ctx.fillStyle = col; _ctx.beginPath(); _ctx.arc(ax + (i === 0 ? -5 : 5), tip, 3, 0, Math.PI * 2); _ctx.fill();
                 });
-
                 [COL.sensorOk, COL.sensorOk, '#00acc1', '#8a91b8'].forEach(function (c, i) {
-                    _ctx.fillStyle = c;
-                    _ctx.beginPath(); _ctx.arc(sx - w * 0.3 + i * (w * 0.2), sy, 3, 0, Math.PI * 2); _ctx.fill();
+                    _ctx.fillStyle = c; _ctx.beginPath(); _ctx.arc(sx - w * 0.3 + i * (w * 0.2), sy, 3, 0, Math.PI * 2); _ctx.fill();
                 });
-
-                _ctx.fillStyle = '#fff';
-                _ctx.font = 'bold ' + Math.max(9, Math.round(10 * _zoom)) + 'px "Segoe UI",sans-serif';
-                _ctx.textAlign = 'center'; _ctx.textBaseline = 'top';
-                _ctx.fillText(label, sx, sy + h / 2 + 6);
-                _ctx.restore();
+                _ctx.fillStyle = '#fff'; _ctx.font = 'bold ' + Math.max(9, Math.round(10 * _zoom)) + 'px "Segoe UI",sans-serif';
+                _ctx.textAlign = 'center'; _ctx.textBaseline = 'top'; _ctx.fillText(label, sx, sy + h / 2 + 6); _ctx.restore();
             }
 
             function drawSensor(sx, sy, r, col, alerting, label) {
                 _ctx.save();
                 if (alerting) {
                     var pulse = 0.45 + 0.45 * Math.sin(_tick * 0.09);
-                    _ctx.strokeStyle = 'rgba(255,82,82,' + pulse + ')';
-                    _ctx.lineWidth = 2;
-                    _ctx.beginPath();
+                    _ctx.strokeStyle = 'rgba(255,82,82,' + pulse + ')'; _ctx.lineWidth = 2; _ctx.beginPath();
                     for (var i = 0; i < 6; i++) {
                         var a = i * Math.PI / 3 - Math.PI / 6;
                         _ctx.lineTo(sx + (r + 8) * Math.cos(a), sy + (r + 8) * Math.sin(a));
                     }
                     _ctx.closePath(); _ctx.stroke();
                 }
-                _ctx.fillStyle = '#101424';
-                _ctx.strokeStyle = col;
-                _ctx.lineWidth = 2.5;
-                _ctx.beginPath();
+                _ctx.fillStyle = '#101424'; _ctx.strokeStyle = col; _ctx.lineWidth = 2.5; _ctx.beginPath();
                 for (var i = 0; i < 6; i++) {
                     var a = i * Math.PI / 3 - Math.PI / 6;
                     _ctx.lineTo(sx + r * Math.cos(a), sy + r * Math.sin(a));
                 }
                 _ctx.closePath(); _ctx.fill(); _ctx.stroke();
-                _ctx.fillStyle = col;
-                _ctx.beginPath(); _ctx.arc(sx, sy, 4, 0, Math.PI * 2); _ctx.fill();
-                _ctx.fillStyle = '#fff';
-                _ctx.font = 'bold ' + Math.max(9, Math.round(10 * _zoom)) + 'px "Segoe UI",sans-serif';
-                _ctx.textAlign = 'center'; _ctx.textBaseline = 'top';
-                _ctx.fillText(label, sx, sy + r + 5);
-                _ctx.restore();
+                _ctx.fillStyle = col; _ctx.beginPath(); _ctx.arc(sx, sy, 4, 0, Math.PI * 2); _ctx.fill();
+                _ctx.fillStyle = '#fff'; _ctx.font = 'bold ' + Math.max(9, Math.round(10 * _zoom)) + 'px "Segoe UI",sans-serif';
+                _ctx.textAlign = 'center'; _ctx.textBaseline = 'top'; _ctx.fillText(label, sx, sy + r + 5); _ctx.restore();
             }
 
-            /* ── render ── */
             function render() {
                 if (!_canvas) return;
                 _ctx.clearRect(0, 0, _W, _H);
-
                 _ctx.fillStyle = 'rgba(255,255,255,0.04)';
                 var gs = 50 * _zoom;
                 var ox = (_W / 2 + _pan.x) % gs, oy = (_H / 2 + _pan.y) % gs;
@@ -918,164 +863,88 @@
                     for (var gy = oy; gy < _H; gy += gs) {
                         _ctx.beginPath(); _ctx.arc(gx, gy, 1, 0, Math.PI * 2); _ctx.fill();
                     }
-
                 var cx = _W / 2 + _pan.x, cy = _H / 2 + _pan.y;
-
                 Object.values(_edges).forEach(function (e) {
                     var a = _nodes[e.from], b = _nodes[e.to];
                     if (!a || !b) return;
-                    drawEdge(cx + a.x * _zoom, cy + a.y * _zoom,
-                        cx + b.x * _zoom, cy + b.y * _zoom,
-                        e.type === 'SG' ? COL.edgeSrv : COL.edgeGw);
+                    drawEdge(cx + a.x * _zoom, cy + a.y * _zoom, cx + b.x * _zoom, cy + b.y * _zoom, e.type === 'SG' ? COL.edgeSrv : COL.edgeGw);
                 });
-
                 Object.values(_nodes).forEach(function (n) {
                     var sx = cx + n.x * _zoom, sy = cy + n.y * _zoom;
                     var r = (n.type === 'SERVER' ? 22 : n.type === 'GATEWAY' ? 17 : 14) * _zoom;
                     var col = (n.type === 'SERVER') ? COL.server : (n.type === 'GATEWAY' ? COL.gateway : (n.alert ? COL.sensorAlert : COL.sensorOk));
-
                     if (n.type === 'SERVER') drawServer(sx, sy, r, col);
                     else if (n.type === 'GATEWAY') drawGateway(sx, sy, r, col, n.label);
                     else drawSensor(sx, sy, r, col, n.alert, n.label);
                 });
-
                 _tick++;
             }
 
-            /* ── loop ── */
-            function _loop() {
-                animateNodes();
-                render();
-                _raf = requestAnimationFrame(_loop);
-            }
+            function _loop() { animateNodes(); render(); _raf = requestAnimationFrame(_loop); }
 
-            /* ── resize ── */
             window.topoResizeCanvas = function () {
                 if (!_canvas) return;
                 var rect = _canvas.getBoundingClientRect();
                 var dpr = window.devicePixelRatio || 1;
-                _canvas.width = rect.width * dpr;
-                _canvas.height = rect.height * dpr;
-                _ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-                _W = rect.width; _H = rect.height;
+                _canvas.width = rect.width * dpr; _canvas.height = rect.height * dpr;
+                _ctx.setTransform(dpr, 0, 0, dpr, 0, 0); _W = rect.width; _H = rect.height;
             };
 
-            /* ── interaction (Pan & Zoom ONLY) ── */
-            function onDown(ex, ey) {
-                _panDrag = { sx: ex, sy: ey, px: _pan.x, py: _pan.y };
-            }
-            function onMove(ex, ey) {
-                if (_panDrag) {
-                    _pan.x = _panDrag.px + (ex - _panDrag.sx);
-                    _pan.y = _panDrag.py + (ey - _panDrag.sy);
-                }
-            }
+            function onDown(ex, ey) { _panDrag = { sx: ex, sy: ey, px: _pan.x, py: _pan.y }; }
+            function onMove(ex, ey) { if (_panDrag) { _pan.x = _panDrag.px + (ex - _panDrag.sx); _pan.y = _panDrag.py + (ey - _panDrag.sy); } }
             function onUp() { _panDrag = null; }
 
-            /* ── init ── */
             function init() {
-                _canvas = document.getElementById('topology-canvas');
-                _ctx = _canvas.getContext('2d');
+                _canvas = document.getElementById('topology-canvas'); _ctx = _canvas.getContext('2d');
                 topoResizeCanvas();
-
                 _canvas.addEventListener('mousedown', function (e) { onDown(e.clientX, e.clientY); });
                 _canvas.addEventListener('mousemove', function (e) { onMove(e.clientX, e.clientY); });
-                _canvas.addEventListener('mouseup', onUp);
-                _canvas.addEventListener('mouseleave', onUp);
+                _canvas.addEventListener('mouseup', onUp); _canvas.addEventListener('mouseleave', onUp);
                 _canvas.addEventListener('wheel', function (e) {
-                    e.preventDefault();
-                    _zoom = Math.max(0.25, Math.min(3.5, _zoom * (e.deltaY < 0 ? 1.1 : 0.91)));
+                    e.preventDefault(); _zoom = Math.max(0.25, Math.min(3.5, _zoom * (e.deltaY < 0 ? 1.1 : 0.91)));
                 }, { passive: false });
-
                 window.addEventListener('resize', topoResizeCanvas);
-
-                if (!_nodes['SERVER']) {
-                    var srv = mkNode('SERVER', 'SERVER', 'Server');
-                    _nodes['SERVER'] = srv;
-                }
+                if (!_nodes['SERVER']) _nodes['SERVER'] = mkNode('SERVER', 'SERVER', 'Server');
                 _loop();
             }
-
-            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-            else init();
-
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
         })();
 
         /* ────────────────────────────────────────────────────────
-           ANALYTICS
+            ANALYTICS
         ──────────────────────────────────────────────────────── */
-        var analyticsChartInstance = null;
-
         async function initializeAnalyticsSelectors() {
             try {
-                var zonesRes = await fetch('/api/zones');
-                var zones = await zonesRes.json();
+                var zonesRes = await fetch('/api/zones'); var zones = await zonesRes.json();
                 var zoneSelect = document.getElementById('analytics-zone');
-                zones.forEach(function (zone) {
-                    var opt = document.createElement('option');
-                    opt.value = zone;
-                    opt.innerText = zone;
-                    zoneSelect.appendChild(opt);
-                });
-
-                var typesRes = await fetch('/api/types');
-                var types = await typesRes.json();
+                zones.forEach(function (zone) { var opt = document.createElement('option'); opt.value = zone; opt.innerText = zone; zoneSelect.appendChild(opt); });
+                var typesRes = await fetch('/api/types'); var types = await typesRes.json();
                 var typeSelect = document.getElementById('analytics-type');
-                types.forEach(function (type) {
-                    var opt = document.createElement('option');
-                    opt.value = type;
-                    opt.innerText = type;
-                    typeSelect.appendChild(opt);
-                });
-            } catch (e) {
-                console.error('Failed to load analytics options:', e);
-            }
+                types.forEach(function (type) { var opt = document.createElement('option'); opt.value = type; opt.innerText = type; typeSelect.appendChild(opt); });
+            } catch (e) { console.error('Failed analytics options:', e); }
         }
 
         async function updateAnalyticsSensors() {
             var zone = document.getElementById('analytics-zone').value;
             var dataType = document.getElementById('analytics-type').value;
-
             try {
                 var queryUrl = '/api/sensors?zone=' + encodeURIComponent(zone) + '&type=' + encodeURIComponent(dataType);
-                var res = await fetch(queryUrl);
-                var sensors = await res.json();
-
+                var res = await fetch(queryUrl); var sensors = await res.json();
                 var sensorSelect = document.getElementById('analytics-sensor');
-                // Limpar opções anteriores exceto a primeira
-                while (sensorSelect.options.length > 1) {
-                    sensorSelect.remove(1);
-                }
-
-                sensors.forEach(function (sensor) {
-                    var opt = document.createElement('option');
-                    opt.value = sensor;
-                    opt.innerText = sensor;
-                    sensorSelect.appendChild(opt);
-                });
-            } catch (e) {
-                console.error('Failed to load sensors:', e);
-            }
+                while (sensorSelect.options.length > 1) sensorSelect.remove(1);
+                sensors.forEach(function (sensor) { var opt = document.createElement('option'); opt.value = sensor; opt.innerText = sensor; sensorSelect.appendChild(opt); });
+            } catch (e) { console.error('Failed sensors:', e); }
         }
 
         async function loadAnalytics() {
             var zone = document.getElementById('analytics-zone').value;
             var dataType = document.getElementById('analytics-type').value;
             var sensor = document.getElementById('analytics-sensor').value;
-
             try {
                 var queryUrl = '/api/stats?zone=' + encodeURIComponent(zone) + '&type=' + encodeURIComponent(dataType);
-                if (sensor && sensor !== 'ALL') {
-                    queryUrl += '&sensor=' + encodeURIComponent(sensor);
-                }
-                var res = await fetch(queryUrl);
-                var stats = await res.json();
-
-                if (stats.error) {
-                    alert('Error: ' + stats.error);
-                    return;
-                }
-
+                if (sensor && sensor !== 'ALL') queryUrl += '&sensor=' + encodeURIComponent(sensor);
+                var res = await fetch(queryUrl); var stats = await res.json();
+                if (stats.error) { alert('Error: ' + stats.error); return; }
                 document.getElementById('analytics-results').style.display = 'block';
                 document.getElementById('stat-mean').innerText = stats.mean;
                 document.getElementById('stat-median').innerText = stats.median;
@@ -1083,15 +952,11 @@
                 document.getElementById('stat-min').innerText = stats.min;
                 document.getElementById('stat-max').innerText = stats.max;
                 document.getElementById('stat-count').innerText = stats.count;
-
-            } catch (e) {
-                console.error('Failed to load analytics:', e);
-                alert('Error loading analytics data');
-            }
+            } catch (e) { alert('Error loading analytics'); }
         }
 
         /* ────────────────────────────────────────────────────────
-           BOOT
+            BOOT
         ──────────────────────────────────────────────────────── */
         initializeAnalyticsSelectors();
         fetchData();
