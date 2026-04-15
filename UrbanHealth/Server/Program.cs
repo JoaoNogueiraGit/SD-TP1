@@ -274,18 +274,57 @@ class Program {
             }
             else if (path.StartsWith("/stream/")) {
                 string sid = path.Split('/').Last();
-                string html = $"<html><body style='background:#000;color:#0f0;text-align:center;'><h2>Stream: {sid}</h2><img id='f' src='/image/{sid}' style='max-width:800px;'/><script>setInterval(()=>document.getElementById('f').src='/image/{sid}?'+Date.now(),200);</script></body></html>";
+
+                // O HTML agora é muito mais limpo. Não há JavaScript!
+                // O browser trata o stream MJPEG nativamente como um vídeo.
+                string html = $@"
+                    <html>
+                    <body style='background:#111;color:#0f0;text-align:center;font-family:sans-serif;'>
+                        <h2>Live Stream (MJPEG): {sid}</h2>
+                        <img src='/mjpeg/{sid}' style='max-width:800px; border:2px solid #00ff00; border-radius:10px;'/>
+                        <p>Transmissão Contínua (Sem Polling)</p>
+                    </body>
+                    </html>";
+
                 byte[] buffer = System.Text.Encoding.UTF8.GetBytes(html);
                 res.ContentType = "text/html";
                 await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
             }
-            else if (path.StartsWith("/image/")) {
+            else if (path.StartsWith("/mjpeg/")) {
                 string sid = path.Split('/').Last();
-                if (_latestFrames.TryGetValue(sid, out byte[] img)) {
-                    res.ContentType = "image/jpeg";
-                    await res.OutputStream.WriteAsync(img, 0, img.Length);
+
+                // O Segredo do MJPEG: Manter a ligação aberta e definir a fronteira (--boundary)
+                res.ContentType = "multipart/x-mixed-replace; boundary=--mjpegframe";
+
+                try {
+                    // Loop infinito que só para se o utilizador fechar a janela do browser
+                    while (true) {
+                        if (_latestFrames.TryGetValue(sid, out byte[] img)) {
+
+                            // Constrói o cabeçalho desta frame específica
+                            byte[] header = System.Text.Encoding.UTF8.GetBytes(
+                                "\r\n--mjpegframe\r\n" +
+                                "Content-Type: image/jpeg\r\n" +
+                                $"Content-Length: {img.Length}\r\n\r\n"
+                            );
+
+                            // Escreve a frame completa para o browser
+                            await res.OutputStream.WriteAsync(header, 0, header.Length);
+                            await res.OutputStream.WriteAsync(img, 0, img.Length);
+                            await res.OutputStream.WriteAsync(System.Text.Encoding.UTF8.GetBytes("\r\n"), 0, 2);
+
+                            // Força o envio imediato dos bytes pela rede
+                            await res.OutputStream.FlushAsync();
+                        }
+
+                        // Espera 100ms antes de enviar a próxima frame (10 FPS constantes)
+                        await Task.Delay(100);
+                    }
+                } catch (Exception) {
+                    // Este erro é perfeitamente normal. Acontece quando o utilizador 
+                    // fecha o separador do browser ou muda de página. O loop morre em paz.
+                    Console.WriteLine($"[STREAM] Visualizador desconectou-se da câmara {sid}.");
                 }
-                else { res.StatusCode = 404; }
             }
             else { res.StatusCode = 404; }
         } catch (Exception ex) {
