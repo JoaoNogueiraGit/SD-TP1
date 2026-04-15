@@ -13,12 +13,12 @@ class Program {
 
     private static readonly int UdpPort = 5002;
     private static readonly int ServerUdpPort = 5003;
-
+    
     private static UdpClient _serverUdpClient = new UdpClient();
 
     private static readonly int Port = 5000;
 
-    private static readonly string ServerIP = Environment.GetEnvironmentVariable("SERVER_IP") ?? "16.171.143.55";
+    private static readonly string ServerIP = Environment.GetEnvironmentVariable("SERVER_IP") ?? "16.171.143.55"; 
 
     private static readonly int ServerPort = int.TryParse(Environment.GetEnvironmentVariable("SERVER_PORT"), out int sp) ? sp : 5001;
 
@@ -51,6 +51,8 @@ class Program {
 
     // Used to generate "Jitter" (Random delay)
     private static readonly Random _rnd = new Random();
+
+    private static LocalCacheManager _cache = new LocalCacheManager();
 
     static async Task Main(string[] args) {
         _config.LoadConfig();
@@ -134,54 +136,117 @@ class Program {
 
     }
 
-    private static async Task BatchDataRoutineAsync() {
+    private static async Task BatchDataRoutineAsync()
+    {
+        int batchWindowMs = 30000; // Envia pacotes a cada 30 segundos
 
-        int batchWindowMs = 30000; // Sent packets every 30 secs
-
-        while (true) {
+        while (true)
+        {
             await Task.Delay(batchWindowMs);
 
+            // Se não houver ligação ao servidor, não vale a pena tentar processar agora,
+            // mas os dados continuam a acumular na memória ou no SQLite.
             if (_serverClient == null || !_serverClient.Connected) continue;
 
-            foreach (var key in _valuesToForward.Keys) {
+            // 1. TENTAR ENVIAR DADOS DO CACHE SQLITE PRIMEIRO (Recuperação de falhas anteriores)
+            var pendingReadings = _cache.GetPendingReadings();
+            if (pendingReadings.Count > 0)
+            {
+                Console.WriteLine($"[CACHE] Encontrados {pendingReadings.Count} registos pendentes no SQLite. A tentar reenviar...");
 
-                if (_valuesToForward.TryRemove(key, out var readingsBag)) {
+                // Agrupamos por Sensor e Tipo para manter a estrutura de Batch
+                var groupedPending = pendingReadings.GroupBy(x => (x.Sid, x.Type));
+
+                foreach (var group in groupedPending)
+                {
+                    var sensorId = group.Key.Sid;
+                    var dataType = group.Key.Type;
+                    var (exists, zone, _, _, _) = _config.ValidateSensor(sensorId);
+
+                    var payloadList = group.Select(item => new Dictionary<string, string> {
+                    { "Timestamp", item.Ts.ToString("o") },
+                    { "Value", item.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+                }).ToList();
+
+                    var cacheMsg = new Message { CMD = "FWD", SID = sensorId, GID = GID };
+                    cacheMsg.Data["TYPE"] = dataType;
+                    cacheMsg.Data["ZONE"] = zone;
+                    cacheMsg.Data["BATCH_COUNT"] = payloadList.Count.ToString();
+                    cacheMsg.Data["RAW_PAYLOAD"] = JsonSerializer.Serialize(payloadList);
+
+                    try
+                    {
+                        await _serverTxLock.WaitAsync();
+                        try
+                        {
+                            await Message.SendMessageAsync(_serverClient, cacheMsg);
+                        }
+                        finally
+                        {
+                            _serverTxLock.Release();
+                        }
+                        // Se enviou com sucesso, apaga estes IDs do SQLite
+                        _cache.DeleteReadings(group.Select(x => x.Id));
+                        Console.WriteLine($"[CACHE] {payloadList.Count} registos de {sensorId} recuperados com sucesso.");
+                    }
+                    catch
+                    {
+                        Console.WriteLine($"[CACHE] Falha ao tentar recuperar dados de {sensorId}. Tentará novamente no próximo ciclo.");
+                        break; // Interrompe para não sobrecarregar em caso de nova queda
+                    }
+                }
+            }
+
+            // 2. PROCESSAR DADOS ATUAIS NA MEMÓRIA
+            foreach (var key in _valuesToForward.Keys)
+            {
+                if (_valuesToForward.TryRemove(key, out var readingsBag))
+                {
                     var snapshot = readingsBag.ToList();
                     if (snapshot.Count == 0) continue;
 
                     string sensorId = key.Item1;
                     string dataType = key.Item2;
                     var (_, zone, _, _, _) = _config.ValidateSensor(sensorId);
-                    
-                    // Transforms the list of Tuples in a list of dicts to be easy to convert to JSON
+
                     var payloadList = new List<Dictionary<string, string>>();
-                    foreach (var item in snapshot) {
+                    foreach (var item in snapshot)
+                    {
                         payloadList.Add(new Dictionary<string, string> {
-                            { "Timestamp", item.Item1.ToString("o") }, // Timestamp
-                            { "Value", item.Item2.ToString(System.Globalization.CultureInfo.InvariantCulture) } // Valor
-                        });
+                        { "Timestamp", item.Item1.ToString("o") },
+                        { "Value", item.Item2.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+                    });
                     }
 
-                    // Create message
                     var batchMsg = new Message { CMD = "FWD", SID = sensorId, GID = GID };
                     batchMsg.Data["TYPE"] = dataType;
                     batchMsg.Data["ZONE"] = zone;
                     batchMsg.Data["BATCH_COUNT"] = snapshot.Count.ToString();
-
                     batchMsg.Data["RAW_PAYLOAD"] = JsonSerializer.Serialize(payloadList);
 
-                    try {
+                    try
+                    {
                         await _serverTxLock.WaitAsync();
-                        try {
+                        try
+                        {
                             await Message.SendMessageAsync(_serverClient, batchMsg);
-                        } finally {
+                        }
+                        finally
+                        {
                             _serverTxLock.Release();
                         }
-                        Console.WriteLine($"[BATCHING] Packet of {snapshot.Count} readings of {sensorId} ({dataType}) sent.");
-                    } catch {
-                        // Rollback 
-                        var recoveryBag = _valuesToForward.GetOrAdd(key, _ => new ConcurrentBag<(DateTime, double)>());
-                        foreach (var value in snapshot) recoveryBag.Add(value);
+                        Console.WriteLine($"[BATCHING] Pacote de {snapshot.Count} leituras de {sensorId} enviado.");
+                    }
+                    catch (Exception ex)
+                    {
+                        // EM CASO DE ERRO: Persiste no SQLite em vez de voltar para a ConcurrentBag
+                        Console.WriteLine($"[ERROR-OFFLINE] Falha ao enviar para o servidor: {ex.Message}");
+                        Console.WriteLine($"[CACHE] A guardar {snapshot.Count} leituras no disco para segurança.");
+
+                        foreach (var reading in snapshot)
+                        {
+                            _cache.SaveReading(sensorId, dataType, reading.Item2, reading.Item1);
+                        }
                     }
                 }
             }
