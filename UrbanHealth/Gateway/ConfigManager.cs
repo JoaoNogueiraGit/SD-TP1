@@ -7,11 +7,30 @@ using System.Threading.Tasks;
 namespace Gateway {
     public class ConfigManager {
 
-        private readonly string _filePath = "sensores.csv";
+        private readonly string _filePath;
 
         private Dictionary<string, (string Zone, string State, string DataTypes, string LastSync)> _sensores = new();
 
         private readonly object _fileLock = new object();
+
+        public ConfigManager() {
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+
+            string projectRoot = Path.GetFullPath(Path.Combine(baseDir, @"..\..\..\sensores.csv"));
+
+
+            if (File.Exists("sensores.csv")) {
+                _filePath = "sensores.csv";
+            }
+
+            else if (File.Exists(Path.Combine(baseDir, "sensores.csv"))) {
+                _filePath = Path.Combine(baseDir, "sensores.csv");
+            }
+
+            else {
+                _filePath = projectRoot;
+            }
+        }
         public void LoadConfig() {
 
             lock (_fileLock) {
