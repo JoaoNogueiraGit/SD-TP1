@@ -19,6 +19,8 @@ class Program {
     private static bool _isStreaming = false;
     private static string _requestedStreamAction = ""; // stores last (START or STOP)
 
+    private static DateTime _lastAlertTime = DateTime.MinValue;
+
     static async Task Main(string[] args) {
 
         // Read console args
@@ -37,13 +39,11 @@ class Program {
         Console.WriteLine(" -> DATA <TYPE> <VALUE> (e.g., DATA HUM 65.2)");
         Console.WriteLine(" -> STRM START (to request video transmission)");
         Console.WriteLine(" -> STRM STOP (to end video transmission)");
-        Console.WriteLine(" -> STRM PHOTO (to send single photo)");
         Console.WriteLine(" -> DISCONN (to gracefully shutdown)");
         Console.WriteLine("==================================================\n");
 
         // start parallel routines (will only send if authenticated)
         _ = Task.Run(HeartbeatRoutineAsync);
-        // _ = Task.Run(DataGenerationRoutineAsync);
         _ = Task.Run(ConnectToGatewayLoopAsync);
         _ = Task.Run(VideoStreamRoutineAsync);
 
@@ -289,17 +289,32 @@ class Program {
                     dataMsg.Data["VALUE"] = value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
                     await Message.SendMessageAsync(_gatewayClient, dataMsg);
-                    Console.WriteLine($"[DATA] {selectedType}: {dataMsg.Data["VALUE"]}");
+                    Console.WriteLine($"[DATA] {selectedType}: {dataMsg.Data["VALUE"]}");                    
 
-                    if (isAlert && !_isStreaming) {
+                    if (isAlert) {
                         Console.WriteLine($"[STREAM] High {selectedType} detected! Requesting video...");
+                        _lastAlertTime = DateTime.Now;
 
-                        _requestedStreamAction = "START";
-                        var strmMsg = new Message { CMD = "STREAM", SID = SID };
-                        strmMsg.Data["ACTION"] = "START";
+                        if (!_isStreaming) {
+                            _requestedStreamAction = "START";
+                            var strmMsg = new Message { CMD = "STRM", SID = SID };
+                            strmMsg.Data["ACTION"] = "START";
 
-                        await Message.SendMessageAsync( _gatewayClient, strmMsg);
+                            await Message.SendMessageAsync(_gatewayClient, strmMsg);
+
+                        }
+                    } else {
+                        
+                        if (_isStreaming && (DateTime.Now - _lastAlertTime).TotalSeconds > 30) {
+                            Console.WriteLine("[STREAM] Environment stabilized for 30s. Stopping video...");
+                            _requestedStreamAction = "STOP";
+                            var strmMsg = new Message { CMD = "STRM", SID = SID };
+                            strmMsg.Data["ACTION"] = "STOP";
+
+                            await Message.SendMessageAsync(_gatewayClient, strmMsg);
+                        }
                     }
+
                 } catch {
                     _isAuthenticated = false;
                     _isStreaming = false;
