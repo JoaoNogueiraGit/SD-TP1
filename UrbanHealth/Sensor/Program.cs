@@ -256,26 +256,33 @@ class Program {
                     dataMsg.Data["TYPE"] = selectedType;
 
                     double value = 0;
+                    bool isAlert = false;
 
                     // Gera valores realistas baseados no tipo
                     switch (selectedType) {
                         case "TEMP":  // Temperature (15 to 35 °C)
                             value = 15.0 + (rnd.NextDouble() * 20.0);
+                            if (value > 33.0) isAlert = true;
                             break;
                         case "HUM":   // Humidity (40 to 80 %)
                             value = 40.0 + (rnd.NextDouble() * 40.0);
+                            if (value > 78.0) isAlert = true;
                             break;
                         case "PM2":   // Quality of air - particles (5 to 50 ug/m³)
                             value = 5.0 + (rnd.NextDouble() * 45.0);
+                            if (value > 48.0) isAlert = true;
                             break;
                         case "CO2":   // Carbon Dioxide (400 to 1000 ppm)
                             value = 400.0 + (rnd.NextDouble() * 600.0);
+                            if (value > 995.0) isAlert = true;
                             break;
                         case "NOISE": // Noise Pollution (40 to 90 dB)
                             value = 40.0 + (rnd.NextDouble() * 50.0);
+                            if (value > 88.0) isAlert = true;
                             break;
                         case "UV":    // UV (0 to 10)
                             value = rnd.NextDouble() * 10.0;
+                            if (value > 9.0) isAlert = true;
                             break;
                     }
 
@@ -283,6 +290,16 @@ class Program {
 
                     await Message.SendMessageAsync(_gatewayClient, dataMsg);
                     Console.WriteLine($"[DATA] {selectedType}: {dataMsg.Data["VALUE"]}");
+
+                    if (isAlert && !_isStreaming) {
+                        Console.WriteLine($"[STREAM] High {selectedType} detected! Requesting video...");
+
+                        _requestedStreamAction = "START";
+                        var strmMsg = new Message { CMD = "STREAM", SID = SID };
+                        strmMsg.Data["ACTION"] = "START";
+
+                        await Message.SendMessageAsync( _gatewayClient, strmMsg);
+                    }
                 } catch {
                     _isAuthenticated = false;
                     _isStreaming = false;

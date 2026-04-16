@@ -278,7 +278,15 @@ class Program {
                 byte[] buffer = System.Text.Encoding.UTF8.GetBytes(html);
                 res.ContentType = "text/html";
                 await res.OutputStream.WriteAsync(buffer, 0, buffer.Length);
-            }            
+            }
+            else if (path.StartsWith("/image/")) {
+                string sid = path.Split('/').Last();
+                if (_latestFrames.TryGetValue(sid, out byte[] img)) {
+                    res.ContentType = "image/jpeg";
+                    await res.OutputStream.WriteAsync(img, 0, img.Length);
+                }
+                else { res.StatusCode = 404; }
+            }
             else { res.StatusCode = 404; }
         } catch (Exception ex) {
             Console.WriteLine($"[WEB ERROR] Request: {ex.Message}");
