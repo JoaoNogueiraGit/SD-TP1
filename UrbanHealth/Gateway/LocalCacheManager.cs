@@ -33,34 +33,64 @@ namespace Gateway
 
         public void SaveReading(string sid, string type, double value, DateTime ts)
         {
-            using (var connection = new SqliteConnection(_connectionString))
+            try
             {
-                connection.Open();
-                var command = connection.CreateCommand();
-                command.CommandText = "INSERT INTO OfflineReadings (SensorId, DataType, Value, Timestamp) VALUES ($sid, $type, $val, $ts)";
-                command.Parameters.AddWithValue("$sid", sid);
-                command.Parameters.AddWithValue("$type", type);
-                command.Parameters.AddWithValue("$val", value);
-                command.Parameters.AddWithValue("$ts", ts.ToString("o"));
-                command.ExecuteNonQuery();
+                Console.WriteLine($"[CACHE-DEBUG] Tentando guardar leitura: SID={sid}, Type={type}, Value={value}, TS={ts:o}");
+
+                using (var connection = new SqliteConnection(_connectionString))
+                {
+                    connection.Open();
+                    Console.WriteLine($"[CACHE-DEBUG] Conexão aberta para: {_connectionString}");
+
+                    var command = connection.CreateCommand();
+                    command.CommandText = "INSERT INTO OfflineReadings (SensorId, DataType, Value, Timestamp) VALUES ($sid, $type, $val, $ts)";
+                    command.Parameters.AddWithValue("$sid", sid);
+                    command.Parameters.AddWithValue("$type", type);
+                    command.Parameters.AddWithValue("$val", value);
+                    command.Parameters.AddWithValue("$ts", ts.ToString("o"));
+
+                    int rowsAffected = command.ExecuteNonQuery();
+                    Console.WriteLine($"[CACHE-DEBUG] INSERT executado com sucesso. Linhas afetadas: {rowsAffected}");
+                }
+
+                Console.WriteLine($"[CACHE-SUCCESS] Leitura de {sid} guardada em SQLite com sucesso!");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CACHE-ERROR] Erro ao guardar leitura em SQLite: {ex.GetType().Name}");
+                Console.WriteLine($"[CACHE-ERROR] Mensagem: {ex.Message}");
+                Console.WriteLine($"[CACHE-ERROR] StackTrace: {ex.StackTrace}");
+                throw; // Re-throw para que o chamador saiba que falhou
             }
         }
 
         public List<(int Id, string Sid, string Type, double Value, DateTime Ts)> GetPendingReadings()
         {
             var list = new List<(int, string, string, double, DateTime)>();
-            using (var connection = new SqliteConnection(_connectionString))
+            try
             {
-                connection.Open();
-                var command = connection.CreateCommand();
-                command.CommandText = "SELECT * FROM OfflineReadings LIMIT 100";
-                using (var reader = command.ExecuteReader())
+                using (var connection = new SqliteConnection(_connectionString))
                 {
-                    while (reader.Read())
+                    connection.Open();
+                    Console.WriteLine($"[CACHE-DEBUG] Lendo pendentes do SQLite...");
+
+                    var command = connection.CreateCommand();
+                    command.CommandText = "SELECT * FROM OfflineReadings LIMIT 100";
+                    using (var reader = command.ExecuteReader())
                     {
-                        list.Add((reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), DateTime.Parse(reader.GetString(4))));
+                        while (reader.Read())
+                        {
+                            list.Add((reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetDouble(3), DateTime.Parse(reader.GetString(4))));
+                        }
                     }
+
+                    Console.WriteLine($"[CACHE-DEBUG] Total de registos pendentes encontrados: {list.Count}");
                 }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CACHE-ERROR] Erro ao ler pendentes: {ex.Message}");
+                Console.WriteLine($"[CACHE-ERROR] StackTrace: {ex.StackTrace}");
             }
             return list;
         }
