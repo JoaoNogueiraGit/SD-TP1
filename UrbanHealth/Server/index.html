@@ -705,12 +705,12 @@
                 var alertSet = {};
                 reads.forEach(function (r) {
                     var val = parseFloat(r.Value);
-                    if (r.Type === 'TEMP' && val > 28) alertSet[r.Sensor] = true;
-                    if (r.Type === 'HUM' && val > 70) alertSet[r.Sensor] = true;
-                    if (r.Type === 'CO2' && val > 800) alertSet[r.Sensor] = true;
-                    if (r.Type === 'NOISE' && val > 75) alertSet[r.Sensor] = true;
-                    if (r.Type === 'PM2' && val > 35) alertSet[r.Sensor] = true;
-                    if (r.Type === 'UV' && val > 7) alertSet[r.Sensor] = true;
+                    if (r.Type === 'TEMP' && val > 33) alertSet[r.Sensor] = true;
+                    if (r.Type === 'HUM' && val > 78) alertSet[r.Sensor] = true;
+                    if (r.Type === 'CO2' && val > 995) alertSet[r.Sensor] = true;
+                    if (r.Type === 'NOISE' && val > 88) alertSet[r.Sensor] = true;
+                    if (r.Type === 'PM2' && val > 48) alertSet[r.Sensor] = true;
+                    if (r.Type === 'UV' && val > 9) alertSet[r.Sensor] = true;
                 });
 
                 if (!_nodes['SERVER']) _nodes['SERVER'] = mkNode('SERVER', 'SERVER', 'Server');
