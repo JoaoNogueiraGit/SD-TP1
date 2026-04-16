@@ -144,10 +144,6 @@ class Program {
         {
             await Task.Delay(batchWindowMs);
 
-            // Se não houver ligação ao servidor, não vale a pena tentar processar agora,
-            // mas os dados continuam a acumular na memória ou no SQLite.
-            if (_serverClient == null || !_serverClient.Connected) continue;
-
             // 1. TENTAR ENVIAR DADOS DO CACHE SQLITE PRIMEIRO (Recuperação de falhas anteriores)
             var pendingReadings = _cache.GetPendingReadings();
             if (pendingReadings.Count > 0)
@@ -176,6 +172,13 @@ class Program {
 
                     try
                     {
+                        // Verifica se há conexão antes de tentar
+                        if (_serverClient == null || !_serverClient.Connected)
+                        {
+                            Console.WriteLine($"[CACHE] Servidor desconectado. A manter dados em cache por mais um ciclo...");
+                            break;
+                        }
+
                         await _serverTxLock.WaitAsync();
                         try
                         {
@@ -189,9 +192,11 @@ class Program {
                         _cache.DeleteReadings(group.Select(x => x.Id));
                         Console.WriteLine($"[CACHE] {payloadList.Count} registos de {sensorId} recuperados com sucesso.");
                     }
-                    catch
+                    catch (Exception cacheEx)
                     {
                         Console.WriteLine($"[CACHE] Falha ao tentar recuperar dados de {sensorId}. Tentará novamente no próximo ciclo.");
+                        Console.WriteLine($"[CACHE] Erro: {cacheEx.Message}");
+                        Console.WriteLine($"[CACHE] Exception Type: {cacheEx.GetType().Name}");
                         break; // Interrompe para não sobrecarregar em caso de nova queda
                     }
                 }
@@ -226,6 +231,13 @@ class Program {
 
                     try
                     {
+                        // Se não há conexão ao servidor, vai direto para o cache
+                        if (_serverClient == null || !_serverClient.Connected)
+                        {
+                            Console.WriteLine($"[ERROR-OFFLINE] Servidor desconectado. Guardando {snapshot.Count} leituras de {sensorId} em cache imediatamente...");
+                            throw new Exception("Server not connected");
+                        }
+
                         await _serverTxLock.WaitAsync();
                         try
                         {
@@ -241,11 +253,19 @@ class Program {
                     {
                         // EM CASO DE ERRO: Persiste no SQLite em vez de voltar para a ConcurrentBag
                         Console.WriteLine($"[ERROR-OFFLINE] Falha ao enviar para o servidor: {ex.Message}");
-                        Console.WriteLine($"[CACHE] A guardar {snapshot.Count} leituras no disco para segurança.");
+                        Console.WriteLine($"[ERROR-OFFLINE] Exception Type: {ex.GetType().Name}");
+                        Console.WriteLine($"[CACHE] A guardar {snapshot.Count} leituras de {sensorId} ({dataType}) no disco para segurança.");
 
                         foreach (var reading in snapshot)
                         {
-                            _cache.SaveReading(sensorId, dataType, reading.Item2, reading.Item1);
+                            try
+                            {
+                                _cache.SaveReading(sensorId, dataType, reading.Item2, reading.Item1);
+                            }
+                            catch (Exception cacheEx)
+                            {
+                                Console.WriteLine($"[CACHE-CRITICAL] FALHA ao guardar no cache: {cacheEx.Message}");
+                            }
                         }
                     }
                 }
