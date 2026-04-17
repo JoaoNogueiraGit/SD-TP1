@@ -21,6 +21,8 @@ class Program {
 
     private static DateTime _lastAlertTime = DateTime.MinValue;
 
+    private static string[] _supportedTypes = { "TEMP", "HUM", "PM2", "CO2", "NOISE", "UV", "VIDEO" };
+
     static async Task Main(string[] args) {
 
         // Read console args
@@ -125,6 +127,33 @@ class Program {
                     try {
                         await Message.SendMessageAsync(_gatewayClient, manualMsg);
                         Console.WriteLine($"[MANUAL] Sent {dataType}: {dataValue}");
+
+                        if (double.TryParse(dataValue, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double numValue)) {
+
+                            bool isAlert = IsAlertCondition(dataType, numValue);
+
+                            if (isAlert) {
+                                Console.WriteLine($"[SENSOR] High {dataType} detected! Requesting video...");
+                                _lastAlertTime = DateTime.Now;
+
+                                if (!_isStreaming) {
+                                    _requestedStreamAction = "START";
+                                    var strmMsg = new Message { CMD = "STRM", SID = SID };
+                                    strmMsg.Data["ACTION"] = "START";
+                                    await Message.SendMessageAsync(_gatewayClient, strmMsg);
+                                }
+                            } else {
+
+                                if (_isStreaming && (DateTime.Now - _lastAlertTime).TotalSeconds > 30) {
+                                    Console.WriteLine("[STREAM] Environment stabilized for 30s. Stopping video...");
+                                    _requestedStreamAction = "STOP";
+                                    var strmMsg = new Message { CMD = "STRM", SID = SID };
+                                    strmMsg.Data["ACTION"] = "STOP";
+
+                                    await Message.SendMessageAsync(_gatewayClient, strmMsg);
+                                }
+                            }
+                        }
                     } catch (Exception ex) {
                         Console.WriteLine($"[ERROR] Failed to send message: {ex.Message}");
                         _isAuthenticated = false;
@@ -150,10 +179,13 @@ class Program {
 
                 _gatewayClient = new TcpClient();
                 Console.WriteLine("[SENSOR] Trying to connect to Gateway...");
+
                 await _gatewayClient.ConnectAsync(GatewayIP, GatewayPort);
                 Console.WriteLine("[SENSOR] Connected to Gateway!");
 
                 var connMsg = new Message { CMD = "CONN", SID = SID };
+                connMsg.Data["DATA_TYPES"] = string.Join(",", _supportedTypes);
+
                 await Message.SendMessageAsync(_gatewayClient, connMsg);
                 Console.WriteLine("[SENSOR] Sent CONN, waiting for response...");
 
@@ -256,35 +288,30 @@ class Program {
                     dataMsg.Data["TYPE"] = selectedType;
 
                     double value = 0;
-                    bool isAlert = false;
 
                     // Gera valores realistas baseados no tipo
                     switch (selectedType) {
                         case "TEMP":  // Temperature (15 to 35 °C)
                             value = 15.0 + (rnd.NextDouble() * 20.0);
-                            if (value > 33.0) isAlert = true;
                             break;
                         case "HUM":   // Humidity (40 to 80 %)
                             value = 40.0 + (rnd.NextDouble() * 40.0);
-                            if (value > 78.0) isAlert = true;
                             break;
                         case "PM2":   // Quality of air - particles (5 to 50 ug/m³)
                             value = 5.0 + (rnd.NextDouble() * 45.0);
-                            if (value > 48.0) isAlert = true;
                             break;
                         case "CO2":   // Carbon Dioxide (400 to 1000 ppm)
                             value = 400.0 + (rnd.NextDouble() * 600.0);
-                            if (value > 995.0) isAlert = true;
                             break;
                         case "NOISE": // Noise Pollution (40 to 90 dB)
                             value = 40.0 + (rnd.NextDouble() * 50.0);
-                            if (value > 88.0) isAlert = true;
                             break;
                         case "UV":    // UV (0 to 10)
                             value = rnd.NextDouble() * 10.0;
-                            if (value > 9.0) isAlert = true;
                             break;
                     }
+
+                    bool isAlert = IsAlertCondition(selectedType, value);
 
                     dataMsg.Data["VALUE"] = value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
@@ -292,7 +319,7 @@ class Program {
                     Console.WriteLine($"[DATA] {selectedType}: {dataMsg.Data["VALUE"]}");                    
 
                     if (isAlert) {
-                        Console.WriteLine($"[STREAM] High {selectedType} detected! Requesting video...");
+                        Console.WriteLine($"[SENSOR] High {selectedType} detected! Requesting video...");
                         _lastAlertTime = DateTime.Now;
 
                         if (!_isStreaming) {
@@ -385,6 +412,18 @@ class Program {
                 }
             }
         }
+    }
+
+    private static bool IsAlertCondition(string dataType, double value) {
+        return dataType switch {
+            "TEMP" => value > 33.0,
+            "HUM" => value > 78.0,
+            "PM2" => value > 48.0,
+            "CO2" => value > 995.0,
+            "NOISE" => value > 88.0,
+            "UV" => value > 9.0,
+            _ => false,
+        };
     }
 
     //private static async Task SendSinglePhotoAsync(string filePath) {

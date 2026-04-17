@@ -51,8 +51,26 @@ namespace Gateway {
                 Console.WriteLine($"[CONFIG] {_sensores.Count} sensors loaded successfully.");
 
             }
+   
+        }
 
-            
+        public void UpdateSensorDataTypes(string sid, string dataTypes) {
+            lock (_fileLock) {
+                if (_sensores.TryGetValue(sid, out var info)) {
+                    // Se o sensor existe, atualiza as capacidades, mete ONLINE e renova o tempo
+                    string state = "online";
+                    string lastSync = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
+
+                    _sensores[sid] = (info.Zone, state, dataTypes, lastSync);
+                    Console.WriteLine($"[CONFIG] Sensor {sid} connected. DataTypes updated to: {dataTypes}");
+
+                    SaveConfig();
+                }
+                else {
+
+                    Console.WriteLine($"[WARNING] Connection attempt from {sid}, but it's not registered. Ignored.");
+                }
+            }
         }
 
         public void UpdateLastSync(string sid) {

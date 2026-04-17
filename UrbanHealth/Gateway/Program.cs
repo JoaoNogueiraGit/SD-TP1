@@ -496,12 +496,9 @@ class Program {
                 }
             } else {
 
-                if (state == "offline" || state == "desativado") {
-                    // Change state to online in memory
-                    _config.UpdateSensorState(msg.SID, "online");
-                    // Save to CSV instantly because it's an important event
-                    _config.SaveConfig();
-                }
+                string dataTypes = msg.Data.ContainsKey("DATA_TYPES") ? msg.Data["DATA_TYPES"] : allowedTypes;
+
+                _config.UpdateSensorDataTypes(msg.SID, dataTypes);
 
                 response.Data["TYPE"] = "ACK";
                 response.Data["ZONE"] = zone; // Inject the zone so the sensor knows
