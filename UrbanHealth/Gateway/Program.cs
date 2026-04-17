@@ -579,7 +579,7 @@ class Program {
                 return; // Corta a execução aqui
             }
 
-            msg.Data["ZONE"] = zone; 
+            msg.Data["ZONE"] = zone;
 
             Console.WriteLine($"[DATA] {msg.SID} sent {msg.Data["VALUE"]} ({msg.Data["TYPE"]})");
 
@@ -591,16 +591,52 @@ class Program {
 
             if (double.TryParse(msg.Data["VALUE"], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double sensorValue)) {
 
-                var bufferKey = (msg.SID, dataType);
-                var readingsBag = _valuesToForward.GetOrAdd(bufferKey, _ => new ConcurrentBag<(DateTime, double)>());
+                // VERIFICA SE É UMA EMERGÊNCIA
+                bool isAlert = IsAlertCondition(dataType, sensorValue);
 
-                readingsBag.Add((DateTime.Now, sensorValue));
+                if (isAlert) {
+                    Console.WriteLine($"[EMERGENCY] High {dataType} from {msg.SID}! Bypassing batching (Speed Layer)...");
+
+                    // Formata um payload JSON com apenas esta leitura instantânea
+                    var payloadList = new List<Dictionary<string, string>> {
+                        new Dictionary<string, string> {
+                            { "Timestamp", DateTime.Now.ToString("o") },
+                            { "Value", sensorValue.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+                        }
+                    };
+
+                    var alertBatchMsg = new Message { CMD = "FWD", SID = msg.SID, GID = GID };
+                    alertBatchMsg.Data["TYPE"] = dataType;
+                    alertBatchMsg.Data["ZONE"] = zone;
+                    alertBatchMsg.Data["BATCH_COUNT"] = "1";
+                    alertBatchMsg.Data["RAW_PAYLOAD"] = JsonSerializer.Serialize(payloadList);
+
+                    // Tenta enviar logo para o servidor (com o respetivo Lock de concorrência)
+                    if (_serverClient != null && _serverClient.Connected) {
+                        await _serverTxLock.WaitAsync();
+                        try {
+                            await Message.SendMessageAsync(_serverClient, alertBatchMsg);
+                        } finally {
+                            _serverTxLock.Release();
+                        }
+                    }
+                    else {
+                        // Se o servidor estiver offline, o dado crítico vai para o SQLite na mesma
+                        _cache.SaveReading(msg.SID, dataType, sensorValue, DateTime.Now);
+                    }
+                }
+                else {
+                    // DADOS NORMAIS
+                    var bufferKey = (msg.SID, dataType);
+                    var readingsBag = _valuesToForward.GetOrAdd(bufferKey, _ => new ConcurrentBag<(DateTime, double)>());
+
+                    readingsBag.Add((DateTime.Now, sensorValue));
+                }
 
             }
             else {
                 Console.WriteLine($"[ERROR] Não foi possível converter o valor '{msg.Data["VALUE"]}' para número.");
             }
-
         }
     }
 
@@ -802,6 +838,18 @@ class Program {
 
         } catch (Exception ex) {
             Console.WriteLine($"[WEB ERROR] {ex.Message}");
+        }
+    }
+
+    private static bool IsAlertCondition(string dataType, double value) {
+        switch (dataType) {
+            case "TEMP": return value > 33.0;
+            case "HUM": return value > 78.0;
+            case "PM2": return value > 48.0;
+            case "CO2": return value > 995.0;
+            case "NOISE": return value > 88.0;
+            case "UV": return value > 9.0;
+            default: return false;
         }
     }
 }

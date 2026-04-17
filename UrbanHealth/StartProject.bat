@@ -9,8 +9,8 @@ echo 1. A iniciar o Gateway...
 cd /d "%BASE_DIR%Gateway"
 start "Gateway" cmd /k "title Gateway G101 && color 0B && dotnet run"
 
-:: Esperar 20 segundos para dar tempo ao Gateway de ler o CSV
-timeout /t 20 /nobreak > NUL
+:: Esperar 30 segundos para dar tempo ao Gateway de ler o CSV
+timeout /t 30 /nobreak > NUL
 
 echo 2. A iniciar os Sensores...
 :: Muda para a pasta do Sensor ANTES de abrir as janelas
