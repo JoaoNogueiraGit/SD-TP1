@@ -18,10 +18,10 @@ O sistema está dividido em três componentes principais:
 
 O servidor central está alojado numa instância **EC2 (Ubuntu 24.04 LTS)**.
 
-* **IP Público:** `16.171.143.55`
+* **IP Público:** `13.49.67.81`
 * **Comando de Acesso SSH:**
     ```bash
-    ssh -i "chave-sd.pem" ubuntu@16.171.143.55
+    ssh -i "chave-sd.pem" ubuntu@13.49.67.81
     ```
 
 > **Nota para Windows:** Se a chave `.pem` der erro de permissões, executa no PowerShell:
